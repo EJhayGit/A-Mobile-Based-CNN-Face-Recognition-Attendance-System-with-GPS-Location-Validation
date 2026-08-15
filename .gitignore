@@ -120,6 +120,7 @@ exports/
 *.pth
 *.ckpt
 *.onnx
+!mobile_app/assets/models/final_face_embedding_fp32_opset18.onnx
 *.tflite
 *.task
 

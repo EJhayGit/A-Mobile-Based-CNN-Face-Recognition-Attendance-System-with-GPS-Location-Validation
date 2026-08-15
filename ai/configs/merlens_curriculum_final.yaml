@@ -34,6 +34,8 @@ export:
   opset: 18
   output_path: ai/checkpoints/exports/merlens_v2_curriculum_fp32_opset18.onnx
   output_sha256: ec6dc4b580d6db053725933b61b78363e4701a1ee5082cbf30c0cc0e0cc347c4
+  public_output_sha256: 1b87df5663c9cc9bc156bdf98377a6680d66fcc3ce2d6f6a40394f3f027d196f
+  public_metadata_redaction: private source-root strings only
   output_size_bytes: 3241210
   dynamic_batch: true
   validation_image_count: 42977

@@ -102,20 +102,19 @@ ENABLE_API_DOCS
 
 ## Mobile setup
 
-The biometric binaries are intentionally not distributed in this public
-repository. Before building, place reviewed, legally redistributable/runtime
-assets at the paths declared in `mobile_app/pubspec.yaml`:
+The final MerLens V2 embedding model is included. Before building, obtain the
+remaining reviewed runtime assets and place them at the paths declared in
+`mobile_app/pubspec.yaml`:
 
 ```text
-mobile_app/assets/models/final_face_embedding_fp32_opset18.onnx
 mobile_app/assets/models/face_detection_yunet_2023mar.onnx
 mobile_app/assets/models/face_landmarker.task
 mobile_app/assets/diagnostics/yunet_validation.png
 ```
 
-The final AGILA embedding weights and diagnostic image are private research
-artifacts. YuNet and Face Landmarker assets must be obtained from their official
-sources with the applicable license notices preserved.
+YuNet and Face Landmarker must be obtained from their official sources with the
+applicable license notices preserved. Do not use facial or participant images
+as the diagnostic image unless their public use is separately authorized.
 
 Then run:
 
@@ -150,8 +149,18 @@ The public repository includes the final architecture, progressive
 identity-curriculum training code, preprocessing, verification, LFW evaluation,
 ONNX export/parity code, and focused tests. See
 [`docs/model-development.md`](docs/model-development.md) and
-[`docs/model-export.md`](docs/model-export.md). Datasets, face images,
-checkpoints, embeddings, and model binaries remain excluded.
+[`docs/model-export.md`](docs/model-export.md). The final inference-only ONNX
+model is included; datasets, face images, training checkpoints, embeddings, and
+run outputs remain excluded.
+
+## Model-use restriction
+
+MerLens V2 was trained using DigiFace-1M under Microsoft's Research Use of Data
+Agreement (R-UDA) v1.0. The R-UDA permits non-commercial computational research
+but prohibits using the data or resulting model in a commercial offering,
+including products or services. See [`docs/model-card.md`](docs/model-card.md)
+and the [official DigiFace-1M license](https://github.com/microsoft/DigiFace1M/blob/main/LICENSE)
+before downloading or using the model.
 
 ## Limitations
 
