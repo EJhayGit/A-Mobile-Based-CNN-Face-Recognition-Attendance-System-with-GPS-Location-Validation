@@ -1,0 +1,11 @@
+# Install the PyTorch build appropriate for the target CPU/CUDA environment.
+torch==2.12.1
+torchvision==0.27.1
+pytorch-metric-learning==2.9.0
+numpy==2.4.6
+opencv-python==4.13.0.90
+onnx==1.22.0
+onnxruntime==1.24.3
+onnxscript==0.7.1
+PyYAML==6.0.3
+pytest==9.1.1

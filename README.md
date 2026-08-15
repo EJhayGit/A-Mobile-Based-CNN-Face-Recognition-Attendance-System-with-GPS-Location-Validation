@@ -40,6 +40,8 @@ connects directly to the database.
 backend/             FastAPI API, authentication, persistence, and tests
 dashboard/           Fleet Manager web interface
 mobile_app/          Flutter Android application and tests
+ai/                  Final MerLens V2 development, evaluation, and export code
+docs/                Concise model-development and export documentation
 supabase/migrations/ PostgreSQL schema migrations
 Dockerfile           Backend/dashboard container
 ```
@@ -143,6 +145,13 @@ normalizes it, runs a compact MerLens V2 ONNX embedding model, and compares
 unit-normalized embeddings with cosine similarity. Liveness is a separate
 MediaPipe-assisted head-turn and color-response workflow. The server records
 the device decision but does not independently rerun biometric inference.
+
+The public repository includes the final architecture, progressive
+identity-curriculum training code, preprocessing, verification, LFW evaluation,
+ONNX export/parity code, and focused tests. See
+[`docs/model-development.md`](docs/model-development.md) and
+[`docs/model-export.md`](docs/model-export.md). Datasets, face images,
+checkpoints, embeddings, and model binaries remain excluded.
 
 ## Limitations
 

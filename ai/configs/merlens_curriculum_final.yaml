@@ -1,0 +1,45 @@
+schema_version: 1
+model:
+  run_name: merlens-v2-curriculum
+  stage: 5
+  epoch: 12
+  checkpoint_path: ai/checkpoints/runs/merlens-v2-curriculum/last_state.pt
+  checkpoint_sha256: 83ff646140ec3b520f96c3490ab80d5ec0f610ef2cdae5645b392c50e5b882c0
+  validation_threshold: 0.2071264386177063
+  health: HEALTHY
+
+external_evaluation:
+  dataset: Labeled Faces in the Wild
+  variant: funneled
+  protocol: View-2 fixed pairs with external fixed threshold; no LFW calibration
+  archive_url: https://ndownloader.figshare.com/files/5976015
+  archive_sha256: b47c8422c8cded889dc5a13418c4bc2abbda121092b3533a83306f90d900100a
+  pairs_url: https://ndownloader.figshare.com/files/5976006
+  pairs_sha256: ea42330c62c92989f9d7c03237ed5d591365e89b3e649747777b70e692dc1592
+  unique_images: 7701
+  processed_images: 7279
+  rejected_images: 422
+  pair_count: 6000
+  fully_processed_pairs: 5398
+  failed_preprocessing_rule: verification rejection
+  accuracy: 0.731
+  false_acceptance_rate: 0.352
+  false_rejection_rate: 0.186
+  balanced_error_rate: 0.269
+  status: completed_once_no_retuning
+
+export:
+  format: ONNX
+  precision: float32
+  opset: 18
+  output_path: ai/checkpoints/exports/merlens_v2_curriculum_fp32_opset18.onnx
+  output_sha256: ec6dc4b580d6db053725933b61b78363e4701a1ee5082cbf30c0cc0e0cc347c4
+  output_size_bytes: 3241210
+  dynamic_batch: true
+  validation_image_count: 42977
+  max_absolute_difference: 0.0000015124678611755371
+  minimum_row_cosine_similarity: 0.9999997615814209
+  validation_pair_count: 1345784
+  decision_mismatch_count: 0
+  desktop_cpu_batch1_median_ms: 4.929399998218287
+  status: passed

@@ -1,0 +1,70 @@
+# Schema version for preprocessing configuration readers.
+schema_version: 1
+
+# One detector artifact must be shared by preprocessing and deployment.
+detector:
+  name: YuNet
+  runtime_api: OpenCV.FaceDetectorYN
+  artifact_filename: face_detection_yunet_2023mar.onnx
+  source_release: opencv_zoo_4.10.0
+  source_url: https://github.com/opencv/opencv_zoo/tree/4.10.0/models/face_detection_yunet
+  license: MIT
+  local_artifact_path: ai/checkpoints/detectors/face_detection_yunet_2023mar.onnx
+  sha256: 8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4
+  input_color_space: BGR
+  input_dtype: uint8
+  input_size_policy: original_upright_image_size
+  # Frozen from the bounded non-final OpenCV Zoo demo pilot documented in
+  # docs/implementation/PREPROCESSING_PIPELINE.md. This is an engineering
+  # operating threshold, not a recognition-performance result.
+  confidence_threshold: 0.9
+  nms_threshold: 0.3
+  top_k: 5000
+  required_face_count: 1
+
+# FaceDetectorYN returns landmarks in this exact order.
+landmarks:
+  order: [right_eye, left_eye, nose_tip, right_mouth_corner, left_mouth_corner]
+  coordinate_system: upright_source_image_pixels
+  reject_non_finite: true
+  reject_out_of_bounds: true
+
+# Target is the 112-pixel InsightFace template scaled exactly by two.
+alignment:
+  method: non_reflective_2d_similarity_least_squares
+  output_height: 224
+  output_width: 224
+  interpolation: bilinear
+  border_mode: constant
+  border_value_bgr: [0, 0, 0]
+  target_points_xy:
+    - [76.5892, 103.3926] # right eye
+    - [147.0636, 103.0028] # left eye
+    - [112.0504, 143.4732] # nose tip
+    - [83.0986, 184.7310] # right mouth corner
+    - [141.4598, 184.4082] # left mouth corner
+
+# Recognition tensor preparation must be byte-for-byte equivalent across roles.
+recognition_input:
+  aligned_color_space: RGB
+  dtype: float32
+  tensor_layout: NCHW
+  value_range: [0.0, 1.0]
+  channel_mean: [0.485, 0.456, 0.406]
+  channel_std: [0.229, 0.224, 0.225]
+
+# These transformations are training-only and never applied to validation/test/mobile data.
+training_augmentation:
+  horizontal_flip_probability: 0.5
+  color_jitter_brightness: 0.1
+  color_jitter_contrast: 0.1
+  color_jitter_saturation: 0.1
+  color_jitter_hue: 0.0
+
+# Every rejected input must be counted without exposing facial content.
+failure_policy:
+  reject_zero_faces: true
+  reject_multiple_faces: true
+  reject_invalid_landmarks: true
+  reject_degenerate_transform: true
+  log_safe_reason_code_only: true

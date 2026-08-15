@@ -1,0 +1,29 @@
+schema_version: 1
+run_name: merlens-v2-curriculum
+stages: [256, 2048, 8192, 32768, 92329]
+data:
+  aligned_root: ai/data/processed/digiface1m/merlens_v2_full
+  train_manifest: ai/data/processed/digiface1m/preprocessing/merlens_v2_full/train.csv
+  validation_manifest: ai/data/processed/digiface1m/preprocessing/merlens_v2_full/validation.csv
+  train_manifest_sha256: bdb00b547249984a2febc10922d2c08d25210018b07fdf0e520fb56f87e59edd
+  validation_manifest_sha256: 6dc1df9cefe68a1a2f08f6ccbb783a09436f2aa47bbebacc4e33ff9a77d2441f
+  usable_train_identities: 92329
+  usable_validation_identities: 5158
+  held_out_access_allowed: false
+training:
+  seed: 20260811
+  batch_size: 96
+  model_learning_rate: 0.0003
+  center_learning_rate: 0.001
+  weight_decay: 0.0001
+  gradient_clip_norm: 5.0
+  maximum_epochs_per_stage: 25
+  minimum_epochs_before_advance: 12
+  maximum_genuine_pairs_per_identity: 10
+transition:
+  optimizer_behavior: rebuild_clean_for_expanded_classifier
+  scheduler_behavior: reset_for_new_stage
+checkpoint:
+  path: ai/checkpoints/runs/merlens-v2-curriculum/last_state.pt
+  status: ai/outputs/runs/merlens-v2-curriculum/training_status.json
+  atomic_replace: true
