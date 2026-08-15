@@ -41,7 +41,6 @@ backend/             FastAPI API, authentication, persistence, and tests
 dashboard/           Fleet Manager web interface
 mobile_app/          Flutter Android application and tests
 supabase/migrations/ PostgreSQL schema migrations
-scripts/             Credential-free Windows demo launcher source
 Dockerfile           Backend/dashboard container
 ```
 
