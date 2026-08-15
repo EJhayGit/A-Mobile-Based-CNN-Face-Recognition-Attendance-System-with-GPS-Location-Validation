@@ -1,0 +1,11 @@
+# FastAPI application and ASGI server.
+fastapi==0.141.1
+uvicorn==0.52.1
+
+# One SQLAlchemy repository layer; psycopg is the PostgreSQL/Supabase driver.
+SQLAlchemy==2.0.51
+psycopg[binary]==3.3.4
+
+# Established authentication libraries.
+argon2-cffi==25.1.0
+PyJWT==2.13.0

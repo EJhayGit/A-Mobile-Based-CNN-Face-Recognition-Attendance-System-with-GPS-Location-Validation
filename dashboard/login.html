@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AGILA Fleet Manager Login</title>
+    <link rel="icon" type="image/png" href="/assets/agila-logo.png" />
+    <script src="/assets/theme.js?v=20260814-release"></script>
+    <link rel="stylesheet" href="/assets/styles.css?v=20260814-agila" />
+  </head>
+  <body class="login-body">
+    <button id="login-theme" class="theme-fab" type="button" aria-label="Toggle color theme">◐</button>
+    <main class="login-shell">
+      <section class="login-intro">
+        <img class="login-logo" src="/assets/agila-logo.png" alt="AGILA" />
+        <p class="eyebrow">AGILA Fleet operations workspace</p>
+        <h1>Keep every delivery and attendance record in view.</h1>
+        <p>Manage Drivers, destinations, assignments, and synchronized attendance from one secure dashboard.</p>
+      </section>
+      <section class="login-card">
+        <p class="eyebrow">Welcome back</p>
+        <h2>Fleet Manager sign in</h2>
+        <p class="muted">Use your manager credentials to continue.</p>
+        <form id="login-form" method="post" action="/login">
+          <label>Login ID<input name="login_id" autocomplete="username" required /></label>
+          <label>Password<input name="password" type="password" autocomplete="current-password" minlength="8" required /></label>
+          <button type="submit">Sign in to dashboard</button>
+          <p id="login-error" class="error" role="alert"></p>
+        </form>
+      </section>
+    </main>
+    <script src="/assets/login.js?v=20260814-agila"></script>
+  </body>
+</html>

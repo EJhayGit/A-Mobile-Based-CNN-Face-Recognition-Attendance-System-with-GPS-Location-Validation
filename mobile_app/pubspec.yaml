@@ -1,0 +1,30 @@
+name: offline_trucking_attendance
+description: Minimum offline Android attendance integration for the thesis.
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  camera: ^0.12.0+2
+  flutter_secure_storage: ^10.3.1
+  geolocator: ^14.0.3
+  opencv_dart: ^1.4.5
+  path_provider: ^2.1.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/branding/agila_logo.png
+    - assets/models/final_face_embedding_fp32_opset18.onnx
+    - assets/models/face_detection_yunet_2023mar.onnx
+    - assets/models/face_landmarker.task
+    - assets/diagnostics/yunet_validation.png

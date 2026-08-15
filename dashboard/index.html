@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AGILA Fleet Manager</title>
+    <link rel="icon" type="image/png" href="/assets/agila-logo.png" />
+    <script src="/assets/theme.js?v=20260814-release"></script>
+    <link rel="preconnect" href="https://tile.openstreetmap.org" />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIINfQ3ynhLwgiJZME5oKp4rRmrPBFAfM4="
+      crossorigin=""
+    />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260814-agila" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="AGILA Fleet Manager dashboard">
+        <img class="brand-logo" src="/assets/agila-logo.png" alt="" /><span class="brand-copy">AGILA</span>
+      </a>
+      <nav aria-label="Primary navigation">
+        <a data-nav="/" href="/"><span data-icon="dashboard"></span><span>Dashboard</span></a>
+        <a data-nav="/drivers" href="/drivers"><span data-icon="drivers"></span><span>Drivers</span></a>
+        <a data-nav="/deliveries" href="/deliveries"><span data-icon="delivery"></span><span>Deliveries</span></a>
+        <a data-nav="/attendance" href="/attendance"><span data-icon="attendance"></span><span>Attendance</span></a>
+        <a data-nav="/audit" href="/audit"><span data-icon="audit"></span><span>Audit</span></a>
+      </nav>
+      <div class="session">
+        <div class="manager-chip"><span class="avatar">FM</span><span><small>Fleet Manager</small><strong id="manager-name">Signed in</strong></span></div>
+        <button id="theme-toggle" class="nav-button" type="button"><span data-icon="theme"></span><span>Theme</span></button>
+        <button id="logout" class="nav-button" type="button"><span data-icon="logout"></span><span>Logout</span></button>
+      </div>
+    </aside>
+    <main id="app" tabindex="-1"><div class="loading-card">Loading fleet workspace…</div></main>
+    <div id="toast" role="status" aria-live="polite"></div>
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="/assets/app.js?v=20260814-driver-actions"></script>
+  </body>
+</html>

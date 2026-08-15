@@ -1,0 +1,5 @@
+# Copy to key.properties and keep the real file private and untracked.
+storeFile=PATH_TO_PRIVATE_RELEASE_KEYSTORE
+storePassword=REPLACE_WITH_PRIVATE_VALUE
+keyAlias=REPLACE_WITH_PRIVATE_VALUE
+keyPassword=REPLACE_WITH_PRIVATE_VALUE

@@ -1,0 +1,1 @@
+"""Minimum attendance synchronization backend."""
