@@ -81,8 +81,8 @@ Thumbs.db
 Desktop.ini
 
 # Private datasets, biometric material, and local application data
-data/
-datasets/
+/data/
+/datasets/
 ai/data/
 **/face_images/
 **/facial_images/
