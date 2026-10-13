@@ -1,7 +1,7 @@
 name: offline_trucking_attendance
 description: Minimum offline Android attendance integration for the thesis.
 publish_to: "none"
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: ^3.12.2
@@ -27,4 +27,7 @@ flutter:
     - assets/models/final_face_embedding_fp32_opset18.onnx
     - assets/models/face_detection_yunet_2023mar.onnx
     - assets/models/face_landmarker.task
-    - assets/diagnostics/yunet_validation.png
+  fonts:
+    - family: Montserrat
+      fonts:
+        - asset: assets/fonts/Montserrat-VariableFont_wght.ttf

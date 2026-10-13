@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 from numpy.typing import NDArray
 
+
 FloatArray = NDArray[np.float32]
 UInt8Array = NDArray[np.uint8]
 
@@ -78,7 +79,7 @@ class YuNetDetector:
         confidence_threshold: float,
         nms_threshold: float = 0.3,
         top_k: int = 5000,
-    ) -> YuNetDetector:
+    ) -> "YuNetDetector":
         """Construct the pinned OpenCV backend from an ignored local artifact."""
 
         path = Path(model_path)

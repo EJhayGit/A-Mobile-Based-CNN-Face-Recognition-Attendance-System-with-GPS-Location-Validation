@@ -3,7 +3,7 @@ import 'package:offline_trucking_attendance/src/app_config.dart';
 
 void main() {
   test('verified Render origin is the packaged default', () {
-    expect(AppConfig.apiBaseUrl, 'https://api.example.com');
+    expect(AppConfig.apiBaseUrl, 'https://agila-thesis.onrender.com');
   });
 
   test('development accepts explicit HTTP and HTTPS server origins', () {
@@ -29,6 +29,12 @@ void main() {
       AppConfig.backendUri('https://api.example.test', releaseMode: true).host,
       'api.example.test',
     );
+  });
+
+  test('release configuration cannot restore persisted Debug Mode', () {
+    expect(AppConfig.debugModeEnabled(true, releaseMode: true), isFalse);
+    expect(AppConfig.debugModeEnabled(true, releaseMode: false), isTrue);
+    expect(AppConfig.debugModeEnabled(false, releaseMode: false), isFalse);
   });
 
   test(

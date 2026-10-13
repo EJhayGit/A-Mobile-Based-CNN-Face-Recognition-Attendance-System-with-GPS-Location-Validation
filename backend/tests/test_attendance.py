@@ -24,6 +24,12 @@ def payload(attempt_id: str = "attempt-1") -> dict[str, object]:
 class AttendanceContractTests(unittest.TestCase):
     def test_valid_mobile_payload_round_trips(self) -> None:
         self.assertEqual(AttendanceRecord.from_payload(payload()).to_dict(), payload())
+        bound = {
+            **payload(),
+            "assignment_id": "assignment-1",
+            "route_stop_id": "stop-1",
+        }
+        self.assertEqual(AttendanceRecord.from_payload(bound).to_dict(), bound)
 
     def test_missing_or_extra_fields_are_rejected(self) -> None:
         missing = payload()

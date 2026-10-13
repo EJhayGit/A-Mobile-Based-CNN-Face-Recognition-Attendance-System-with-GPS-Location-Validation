@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import argparse
-import json
 from collections import Counter
 from hashlib import sha256
+import json
 from pathlib import Path
 
 import cv2
@@ -25,9 +25,7 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def parse_view2_pairs(
-    path: Path, image_root: Path
-) -> tuple[tuple[Path, Path, bool], ...]:
+def parse_view2_pairs(path: Path, image_root: Path) -> tuple[tuple[Path, Path, bool], ...]:
     lines = [line.split() for line in path.read_text(encoding="utf-8").splitlines()]
     if not lines or lines[0] != ["10", "300"] or len(lines) != 6001:
         raise DatasetIntegrityError("unexpected LFW View-2 pair protocol")
@@ -46,23 +44,17 @@ def parse_view2_pairs(
         for fields in lines[offset : offset + 300]:
             if len(fields) != 3:
                 raise DatasetIntegrityError("invalid genuine LFW pair")
-            pairs.append(
-                (image(fields[0], fields[1]), image(fields[0], fields[2]), True)
-            )
+            pairs.append((image(fields[0], fields[1]), image(fields[0], fields[2]), True))
         offset += 300
         for fields in lines[offset : offset + 300]:
             if len(fields) != 4:
                 raise DatasetIntegrityError("invalid impostor LFW pair")
-            pairs.append(
-                (image(fields[0], fields[1]), image(fields[2], fields[3]), False)
-            )
+            pairs.append((image(fields[0], fields[1]), image(fields[2], fields[3]), False))
         offset += 300
     return tuple(pairs)
 
 
-def fixed_threshold_metrics(
-    labels: np.ndarray, accepted: np.ndarray
-) -> dict[str, float | int]:
+def fixed_threshold_metrics(labels: np.ndarray, accepted: np.ndarray) -> dict[str, float | int]:
     genuine = labels.astype(bool)
     impostor = ~genuine
     false_accepts = int(np.sum(accepted & impostor))
@@ -109,14 +101,10 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         and health.get("verdict") == "HEALTHY"
         and health.get("ready_to_advance") is True
     ):
-        raise DatasetIntegrityError(
-            "checkpoint is not the completed healthy curriculum model"
-        )
+        raise DatasetIntegrityError("checkpoint is not the completed healthy curriculum model")
     checkpoint_threshold = float(payload["history"][-1]["validation_threshold"])
     if checkpoint_threshold != args.locked_threshold:
-        raise DatasetIntegrityError(
-            "locked threshold does not match checkpoint history"
-        )
+        raise DatasetIntegrityError("locked threshold does not match checkpoint history")
 
     pairs = parse_view2_pairs(args.pairs, args.image_root)
     detector = YuNetDetector.from_model(
@@ -146,12 +134,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             except ValueError:
                 rejection_reasons["alignment_or_tensor_error"] += 1
         if tensors:
-            outputs = (
-                model(torch.from_numpy(np.stack(tensors)).to(device))
-                .float()
-                .cpu()
-                .numpy()
-            )
+            outputs = model(torch.from_numpy(np.stack(tensors)).to(device)).float().cpu().numpy()
             for image_path, embedding in zip(accepted_paths, outputs, strict=True):
                 embeddings[image_path] = embedding
 
@@ -183,9 +166,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "metrics": fixed_threshold_metrics(labels, accepted),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return result
 
 

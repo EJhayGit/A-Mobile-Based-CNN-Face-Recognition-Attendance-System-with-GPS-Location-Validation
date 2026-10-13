@@ -2,56 +2,88 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:offline_trucking_attendance/src/camera_diagnostics.dart';
 import 'package:offline_trucking_attendance/src/camera_flow.dart';
 import 'package:offline_trucking_attendance/src/camera_scan_screen.dart';
 import 'package:offline_trucking_attendance/src/secure_liveness_flow.dart';
 
 void main() {
-  test('normal guidance hides technical state while debug preserves it', () {
-    const technical = 'Sampling the green response 1/8';
+  test(
+    'normal guidance hides technical pose state while debug preserves it',
+    () {
+      const technical = 'Turn detected — return your head to center';
+      expect(
+        cameraGuidanceFor(
+          debugMode: false,
+          stage: SecureLivenessStage.headReturn,
+          detailedGuidance: technical,
+          purpose: ScanPurpose.attendance,
+        ),
+        'Turn back to center',
+      );
+      expect(
+        cameraGuidanceFor(
+          debugMode: true,
+          stage: SecureLivenessStage.headReturn,
+          detailedGuidance: technical,
+          purpose: ScanPurpose.attendance,
+        ),
+        technical,
+      );
+    },
+  );
+
+  test('normal attendance failures are specific and non-technical', () {
     expect(
-      cameraGuidanceFor(
-        debugMode: false,
-        stage: SecureLivenessStage.colorChallenge,
-        detailedGuidance: technical,
-        purpose: ScanPurpose.attendance,
-      ),
-      'Checking liveness',
+      normalAttendanceMessage('Position your face'),
+      'No face detected. Position your face inside the guide.',
     );
+    expect(
+      normalAttendanceMessage('Multiple faces detected'),
+      'Only one person should be visible.',
+    );
+    expect(
+      normalAttendanceMessage('Move closer'),
+      'Move closer to the camera.',
+    );
+    expect(
+      normalAttendanceMessage('Keep your full face inside the oval'),
+      'Move slightly farther from the camera.',
+    );
+    expect(
+      normalAttendanceMessage('Hold the phone and your face still'),
+      'Your face image is unclear. Move to a brighter area and hold still.',
+    );
+    expect(
+      normalAttendanceMessage('Verification failed'),
+      'Face not recognized. Please try again.',
+    );
+    expect(
+      normalAttendanceMessage('GPS validation failed'),
+      'Your location could not be verified. Please enable location services and try again.',
+    );
+    expect(
+      normalAttendanceMessage(
+        'Attendance saved offline. It will sync when internet is available.',
+      ),
+      'Attendance saved offline. It will sync when internet is available.',
+    );
+    expect(
+      normalCameraFailureMessage(CameraScanFailureKind.embeddingInference),
+      isNot(contains('Embedding')),
+    );
+  });
+
+  test('Debug Mode continues to expose the existing technical guidance', () {
+    const technical = 'Multiple faces detected';
     expect(
       cameraGuidanceFor(
         debugMode: true,
-        stage: SecureLivenessStage.colorChallenge,
+        stage: SecureLivenessStage.quality,
         detailedGuidance: technical,
         purpose: ScanPurpose.attendance,
       ),
       technical,
-    );
-    expect(
-      cameraGuidanceFor(
-        debugMode: false,
-        stage: SecureLivenessStage.headReturn,
-        detailedGuidance: 'Return your head to center',
-        purpose: ScanPurpose.attendance,
-      ),
-      'Turn back to center',
-    );
-  });
-
-  test('challenge perimeter is opaque while the camera oval stays clear', () {
-    const size = Size(400, 800);
-    const guide = Rect.fromLTWH(60, 120, 280, 520);
-    final perimeter = buildLivenessPerimeterPath(size, guide);
-
-    expect(perimeter.contains(const Offset(10, 10)), isTrue);
-    expect(perimeter.contains(guide.center), isFalse);
-    expect(
-      resolveLivenessPerimeterColor(
-        illuminated: false,
-        screenColor: ChallengeScreenColor.red,
-        colorBaselineActive: false,
-      ),
-      const Color(0xFFFF0000),
     );
   });
 
@@ -66,16 +98,14 @@ void main() {
     expect(
       resolveLivenessPerimeterColor(
         illuminated: false,
-        screenColor: ChallengeScreenColor.neutral,
-        colorBaselineActive: false,
+        screenIllumination: ScreenIllumination.neutral,
       ),
       Colors.white,
     );
     expect(
       resolveLivenessPerimeterColor(
         illuminated: true,
-        screenColor: ChallengeScreenColor.white,
-        colorBaselineActive: false,
+        screenIllumination: ScreenIllumination.white,
       ),
       Colors.white,
     );
@@ -92,30 +122,23 @@ void main() {
     expect(source, contains('await _brightnessRuntime.setForIllumination();'));
   });
 
-  test('color baseline is neutral and each challenge channel is pure', () {
-    expect(
-      resolveLivenessPerimeterColor(
-        illuminated: false,
-        screenColor: ChallengeScreenColor.neutral,
-        colorBaselineActive: true,
-      ),
-      const Color(0xFF202020),
-    );
-    expect(
-      resolveLivenessPerimeterColor(
-        illuminated: false,
-        screenColor: ChallengeScreenColor.green,
-        colorBaselineActive: false,
-      ),
-      const Color(0xFF00FF00),
-    );
-    expect(
-      resolveLivenessPerimeterColor(
-        illuminated: false,
-        screenColor: ChallengeScreenColor.blue,
-        colorBaselineActive: false,
-      ),
-      const Color(0xFF0000FF),
-    );
+  test('presentation contains no color-response states or prompts', () {
+    final controller = File(
+      'lib/src/secure_liveness_flow.dart',
+    ).readAsStringSync();
+    final screen = File('lib/src/camera_scan_screen.dart').readAsStringSync();
+    final activeSource = '$controller\n$screen'.toLowerCase();
+
+    for (final obsolete in [
+      'colorbaseline',
+      'colorchallenge',
+      'color response',
+      'sampling the green',
+      'sampling the red',
+      'sampling the blue',
+      'photosensitivity',
+    ]) {
+      expect(activeSource, isNot(contains(obsolete)));
+    }
   });
 }

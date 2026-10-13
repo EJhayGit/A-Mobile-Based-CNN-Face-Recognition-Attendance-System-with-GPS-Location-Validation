@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import tempfile
 from contextlib import contextmanager
 from pathlib import Path
+import tempfile
 from zipfile import ZIP_STORED, ZipFile
 
 import cv2
@@ -45,7 +45,9 @@ def _write_archive(
                 if identity == malformed_identity and image_index == 4:
                     payload = b"not a PNG"
                 else:
-                    value_identity = 0 if identity == duplicate_identity else identity
+                    value_identity = (
+                        0 if identity == duplicate_identity else identity
+                    )
                     payload = _png_bytes(value_identity * 5 + image_index)
                 archive.writestr(f"{100000 + identity}/{image_index}.png", payload)
 
@@ -97,11 +99,9 @@ def test_subset_is_deterministic_identity_disjoint_and_relative() -> None:
             ("validation", 1),
             ("held_out", 1),
         ):
-            rows = (
-                (workspace / "manifests-one" / f"{partition}.csv")
-                .read_text(encoding="utf-8")
-                .splitlines()[1:]
-            )
+            rows = (workspace / "manifests-one" / f"{partition}.csv").read_text(
+                encoding="utf-8"
+            ).splitlines()[1:]
             identities = {row.split(",")[1] for row in rows}
             assert len(rows) == expected_identities * 5
             assert len(identities) == expected_identities

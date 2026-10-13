@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'src/biometric_testing.dart';
+import 'src/biometric_testing_screen.dart';
 import 'src/camera_flow.dart';
 import 'src/camera_scan_screen.dart';
 import 'src/app_config.dart';
@@ -55,7 +58,7 @@ ThemeData _fleetTheme(Brightness brightness) {
     colorScheme: scheme,
     useMaterial3: true,
     scaffoldBackgroundColor: dark ? fleetDarkBackground : fleetBackground,
-    fontFamily: 'sans-serif',
+    fontFamily: 'Montserrat',
     appBarTheme: const AppBarTheme(
       backgroundColor: fleetNavy,
       foregroundColor: Colors.white,
@@ -145,6 +148,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   bool _syncing = false;
   bool _offline = false;
   bool _debugMode = false;
+  String _faceReregistrationStatus = 'none';
+  String _deviceAuthorizationStatus = 'unbound';
   bool? _networkAvailable;
   DateTime? _lastSyncedAt;
   StreamSubscription<bool>? _networkSubscription;
@@ -172,12 +177,21 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     final cachedDriver = await _storage.readDriverProfile();
     final cachedAssignment = await _storage.readDriverAssignment();
     final refreshToken = await _storage.readRefreshToken();
-    _debugMode = await _storage.readDebugMode();
+    _debugMode = AppConfig.debugModeEnabled(await _storage.readDebugMode());
     _lastSyncedAt = await _storage.readLastSyncedAt();
-    _registered = await _storage.readTemplate() != null;
     _pendingAttempts = await _storage.readQueue();
     if (cachedAssignment != null) {
       _assignment = DriverAssignment.fromJson(cachedAssignment);
+      final cachedIdentity = cachedDriver == null
+          ? null
+          : DriverIdentity.fromJson(cachedDriver);
+      if (cachedIdentity != null) {
+        _assignment = _assignment!.applyPendingAttendance(
+          _pendingAttempts,
+          driverId: cachedIdentity.id,
+        );
+        await _storage.saveDriverAssignment(_assignment!.toJson());
+      }
     }
     _site = _assignment?.isActive == true
         ? _assignment!.site
@@ -187,23 +201,28 @@ class _AttendanceScreenState extends State<AttendanceScreen>
 
     if (endpoint != null && cachedDriver != null && refreshToken != null) {
       _driver = DriverIdentity.fromJson(cachedDriver);
+      _deviceAuthorizationStatus =
+          cachedDriver['device_authorization_status'] as String? ?? 'unbound';
+      _registered = await _storage.readTemplate(_driver!.id) != null;
     }
     if (endpoint != null && refreshToken != null && _driver != null) {
       try {
         final client = DriverBackendClient(AppConfig.backendUri(endpoint));
-        final session = await client.refresh(refreshToken);
+        final session = await client.refresh(refreshToken, _driver!.employeeId);
         await _saveSession(client, session);
       } on SocketException {
         _offline = true;
         _message = _site == null
-            ? 'Offline. Connect to refresh your delivery assignment.'
-            : 'Offline mode. Your saved delivery remains available.';
+            ? 'Offline. Connect to refresh your Site Assignment.'
+            : 'Offline mode. Your saved Site Assignment remains available.';
       } on BackendRequestException catch (error) {
         if (error.statusCode != 401) {
           _message = 'Could not refresh the account. Please try again.';
         } else {
           await _storage.clearBackendSession();
           _driver = null;
+          _registered = false;
+          _deviceAuthorizationStatus = 'unbound';
           _site = null;
           _assignment = null;
           _message = 'Your session expired. Please sign in again.';
@@ -211,6 +230,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       } catch (_) {
         await _storage.clearBackendSession();
         _driver = null;
+        _registered = false;
+        _deviceAuthorizationStatus = 'unbound';
         _site = null;
         _assignment = null;
         _message = 'Your session expired. Please sign in again.';
@@ -254,23 +275,62 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       session.tokens.refreshToken,
     );
     final profile = await client.profile(session.tokens.accessToken);
-    if (profile.assignedSite == null) {
+    _pendingAttempts = await _storage.readQueue();
+    final assignment = profile.assignment?.applyPendingAttendance(
+      _pendingAttempts,
+      driverId: profile.driver.id,
+    );
+    final assignedSite = assignment?.isActive == true ? assignment!.site : null;
+    if (assignedSite == null) {
       await _storage.clearSite();
     } else {
-      await _storage.saveSite(profile.assignedSite!);
+      await _storage.saveSite(assignedSite);
     }
-    if (profile.assignment == null) {
+    if (assignment == null) {
       await _storage.clearDriverAssignment();
     } else {
-      await _storage.saveDriverAssignment(profile.assignment!.toJson());
+      await _storage.saveDriverAssignment(assignment.toJson());
     }
     _driver = profile.driver;
-    _site = profile.assignedSite;
-    _assignment = profile.assignment;
+    _site = assignedSite;
+    _assignment = assignment;
+    _faceReregistrationStatus = profile.faceReregistrationStatus;
+    _deviceAuthorizationStatus = profile.deviceAuthorizationStatus;
+    final pendingConsumption = await _storage
+        .readPendingFaceApprovalConsumption();
+    if (pendingConsumption == profile.driver.id) {
+      if (_faceReregistrationStatus == 'approved') {
+        _faceReregistrationStatus = await client
+            .consumeFaceReregistrationApproval(session.tokens.accessToken);
+      }
+      if (_faceReregistrationStatus == 'consumed') {
+        await _storage.clearPendingFaceApprovalConsumption();
+      }
+    }
+    _registered = await _storage.readTemplate(profile.driver.id) != null;
+    if (_registered && _deviceAuthorizationStatus == 'enrollment_required') {
+      final pendingDeviceEnrollment = await _storage
+          .readPendingDeviceEnrollmentCompletion();
+      if (pendingDeviceEnrollment == profile.driver.id) {
+        try {
+          await client.completeDeviceEnrollment(session.tokens.accessToken);
+          await _storage.clearPendingDeviceEnrollmentCompletion();
+          _deviceAuthorizationStatus = 'ready';
+        } on Object {
+          // Keep the local completion marker and retry after connectivity returns.
+        }
+      } else {
+        await _storage.deleteTemplate(profile.driver.id);
+        _registered = false;
+      }
+    } else if (_deviceAuthorizationStatus == 'ready') {
+      await _storage.clearPendingDeviceEnrollmentCompletion();
+    }
     await _storage.saveDriverProfile(
       id: profile.driver.id,
       employeeId: profile.driver.employeeId,
       fullName: profile.driver.fullName,
+      deviceAuthorizationStatus: _deviceAuthorizationStatus,
     );
   }
 
@@ -296,8 +356,10 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       _password.clear();
       _activationCode.clear();
       _confirmation.clear();
-      _message = _site == null
-          ? 'Signed in. Ask your manager to assign a delivery before check-in.'
+      _message = _deviceAuthorizationStatus != 'ready'
+          ? 'Signed in. Complete supervised face setup on this authorized device.'
+          : _site == null
+          ? 'Signed in. Ask your manager to assign a Site Assignment before check-in.'
           : 'Ready for check-in.';
     });
   }
@@ -319,6 +381,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       }
       await _storage.clearBackendSession();
       _driver = null;
+      _registered = false;
+      _deviceAuthorizationStatus = 'unbound';
       _site = null;
       _assignment = null;
       _selectedTab = 0;
@@ -328,8 +392,25 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     }
   }
 
-  Future<void> _openRegistration() async {
+  Future<void> _openRegistration({bool reRegistration = false}) async {
     if (!_pipelineReady || _busy) return;
+    final driver = _driver;
+    if (driver == null) return;
+    if (reRegistration && _faceReregistrationStatus != 'approved') {
+      setState(
+        () => _message =
+            'Fleet Manager approval is required before re-registration.',
+      );
+      return;
+    }
+    if (!reRegistration &&
+        _deviceAuthorizationStatus != 'enrollment_required') {
+      setState(
+        () => _message =
+            'Face setup on this device requires Fleet Manager authorization.',
+      );
+      return;
+    }
     final result = await Navigator.of(context).push<CameraScanResult>(
       MaterialPageRoute(
         builder: (_) => CameraScanScreen(
@@ -338,25 +419,130 @@ class _AttendanceScreenState extends State<AttendanceScreen>
           storage: _storage,
           queue: _queue,
           location: _location,
+          driverId: driver.id,
           debugMode: _debugMode,
         ),
       ),
     );
+    if (reRegistration && result?.success == true) {
+      final endpoint = await _storage.readEndpoint();
+      final accessToken = await _storage.readAccessToken();
+      if (endpoint != null && accessToken != null) {
+        try {
+          _faceReregistrationStatus = await DriverBackendClient(
+            AppConfig.backendUri(endpoint),
+          ).consumeFaceReregistrationApproval(accessToken);
+          await _storage.clearPendingFaceApprovalConsumption();
+        } on Object {
+          _faceReregistrationStatus = 'consumed';
+          await _storage.savePendingFaceApprovalConsumption(driver.id);
+          if (mounted) {
+            setState(
+              () => _message =
+                  'Face re-registration completed. Approval cleanup will retry when connected.',
+            );
+          }
+          return;
+        }
+      }
+    }
+    if (!reRegistration && result?.success == true) {
+      final endpoint = await _storage.readEndpoint();
+      final accessToken = await _storage.readAccessToken();
+      if (endpoint != null && accessToken != null) {
+        await _storage.savePendingDeviceEnrollmentCompletion(driver.id);
+        try {
+          await DriverBackendClient(
+            AppConfig.backendUri(endpoint),
+          ).completeDeviceEnrollment(accessToken);
+          await _storage.clearPendingDeviceEnrollmentCompletion();
+          _deviceAuthorizationStatus = 'ready';
+        } on Object {
+          _deviceAuthorizationStatus = 'enrollment_required';
+          if (mounted) {
+            setState(
+              () => _message =
+                  'Face saved. Connect to confirm this device before attendance.',
+            );
+          }
+          return;
+        }
+      }
+    }
     await _refreshLocalState(result?.message);
+  }
+
+  Future<void> _requestDeviceReplacement() async {
+    await _run(() async {
+      final employeeId = _employeeId.text.trim();
+      final password = _password.text;
+      if (employeeId.isEmpty || password.isEmpty) {
+        throw const FormatException(
+          'Enter your employee ID and password before requesting a new device.',
+        );
+      }
+      final status = await DriverBackendClient(
+        _backendUri(),
+      ).requestDeviceReplacement(employeeId, password);
+      _message = status == 'pending'
+          ? 'Device request sent. Ask your Fleet Manager to verify and approve this phone.'
+          : 'Device request status: $status.';
+    });
+  }
+
+  Future<void> _requestFaceReregistration() async {
+    await _run(() async {
+      final endpoint = await _storage.readEndpoint();
+      final accessToken = await _storage.readAccessToken();
+      if (endpoint == null || accessToken == null) {
+        throw const FormatException('Connect and sign in to request approval.');
+      }
+      _faceReregistrationStatus = await DriverBackendClient(
+        AppConfig.backendUri(endpoint),
+      ).requestFaceReregistration(accessToken);
+      _message = 'Waiting for Fleet Manager approval.';
+    });
   }
 
   Future<void> _openAttendance() async {
     if (!_pipelineReady || _busy) return;
-    final template = await _storage.readTemplate();
+    final driver = _driver;
+    if (driver == null) return;
+    if (_deviceAuthorizationStatus != 'ready') {
+      setState(
+        () => _message =
+            'Complete the authorized face setup on this device before attendance.',
+      );
+      return;
+    }
+    final template = await _storage.readTemplate(driver.id);
     if (template == null) {
       setState(
         () => _message = 'Complete face setup before your first check-in.',
       );
       return;
     }
-    final site = await _storage.readSite();
-    if (site == null) {
-      setState(() => _message = 'No active delivery is assigned yet.');
+    final assignment = _assignment;
+    final site = assignment?.isActive == true ? assignment!.site : null;
+    if (assignment == null || site == null) {
+      setState(
+        () => _message = assignment?.isPendingSynchronization == true
+            ? 'This Site Assignment is submitted and waiting to sync.'
+            : 'No active Site Assignment is assigned yet.',
+      );
+      return;
+    }
+    final currentStop = assignment.currentStop;
+    if (await _queue.hasPendingSubmission(
+      driverId: driver.id,
+      assignmentId: assignment.id,
+      routeStopId: currentStop?.id,
+      siteId: site.id,
+    )) {
+      setState(
+        () => _message =
+            'Attendance for this Site Assignment is already saved and waiting to sync.',
+      );
       return;
     }
     if (!mounted) return;
@@ -368,6 +554,9 @@ class _AttendanceScreenState extends State<AttendanceScreen>
           storage: _storage,
           queue: _queue,
           location: _location,
+          driverId: driver.id,
+          assignmentId: assignment.id,
+          routeStopId: currentStop?.id,
           enrollmentTemplate: template,
           authorizedSite: site,
           debugMode: _debugMode,
@@ -381,7 +570,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         setState(() {
           _message = synchronized && _pendingAttempts.isEmpty
               ? 'Attendance recorded.'
-              : 'Saved offline — will sync automatically.';
+              : 'Attendance saved offline. It will sync when internet is available.';
         });
       }
     }
@@ -409,7 +598,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         return false;
       }
       final client = DriverBackendClient(AppConfig.backendUri(endpoint));
-      final session = await client.refresh(refreshToken);
+      final session = await client.refresh(refreshToken, _driver!.employeeId);
       await _saveSession(client, session);
       final uploaded = await _queue.synchronize(
         HttpAttendanceGateway(client.endpoint, session.tokens.accessToken),
@@ -454,8 +643,46 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   }
 
   Future<void> _setDebugMode(bool enabled) async {
+    if (!kDebugMode) return;
     setState(() => _debugMode = enabled);
     await _storage.saveDebugMode(enabled);
+  }
+
+  Future<void> _openBiometricTesting() async {
+    if (!kDebugMode || !_debugMode || !_registered || _busy) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => BiometricTestingScreen(
+          store: _storage,
+          onRunTrial: _runBiometricTrial,
+        ),
+      ),
+    );
+  }
+
+  Future<BiometricTrialRecord?> _runBiometricTrial(
+    BiometricTrialSetup setup,
+  ) async {
+    final driver = _driver;
+    if (driver == null) return null;
+    final template = await _storage.readTemplate(driver.id);
+    if (template == null || !mounted) return null;
+    final result = await Navigator.of(context).push<CameraScanResult>(
+      MaterialPageRoute(
+        builder: (_) => CameraScanScreen(
+          purpose: ScanPurpose.attendance,
+          pipeline: _pipeline,
+          storage: _storage,
+          queue: _queue,
+          location: _location,
+          driverId: driver.id,
+          enrollmentTemplate: template,
+          debugMode: true,
+          biometricTrialSetup: setup,
+        ),
+      ),
+    );
+    return result?.biometricTrial;
   }
 
   Future<void> _openDirections() async {
@@ -475,8 +702,25 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   }
 
   Future<void> _refreshLocalState(String? message) async {
-    _registered = await _storage.readTemplate() != null;
+    final driver = _driver;
+    _registered =
+        driver != null && await _storage.readTemplate(driver.id) != null;
     _pendingAttempts = await _storage.readQueue();
+    final assignment = _assignment;
+    if (driver != null && assignment != null) {
+      _assignment = assignment.applyPendingAttendance(
+        _pendingAttempts,
+        driverId: driver.id,
+      );
+      await _storage.saveDriverAssignment(_assignment!.toJson());
+      if (_assignment!.isActive) {
+        _site = _assignment!.site;
+        await _storage.saveSite(_site!);
+      } else {
+        _site = null;
+        await _storage.clearSite();
+      }
+    }
     if (message != null) _message = message;
     if (mounted) setState(() {});
   }
@@ -521,12 +765,14 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         confirmationController: _confirmation,
         onLogin: () => _authenticate(activation: false),
         onActivate: () => _authenticate(activation: true),
+        onRequestDeviceReplacement: _requestDeviceReplacement,
       );
     }
     return DriverShellView(
       driver: _driver!,
       assignment: _assignment,
       registered: _registered,
+      faceReregistrationStatus: _faceReregistrationStatus,
       pendingAttempts: _pendingAttempts,
       busy: _busy || _syncing,
       cameraReady: _pipelineReady,
@@ -537,10 +783,13 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       selectedIndex: _selectedTab,
       onDestinationSelected: (index) => setState(() => _selectedTab = index),
       onCheckIn: _openAttendance,
-      onRegister: _openRegistration,
+      onRegister: () => _openRegistration(),
+      onRequestFaceReregistration: _requestFaceReregistration,
+      onReregister: () => _openRegistration(reRegistration: true),
       onSynchronize: _synchronize,
       onRefresh: _synchronize,
       onDebugModeChanged: _setDebugMode,
+      onOpenBiometricTesting: _openBiometricTesting,
       onOpenDirections: _openDirections,
       onLogout: _logout,
     );

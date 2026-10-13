@@ -1,173 +1,210 @@
-# AGILA
+# AGILA — CNN-Based Facial Recognition Attendance System with GPS Authentication
 
-AGILA is a research prototype for facial-recognition attendance in fleet and
-driver operations. It combines an Android driver application, a Fleet Manager
-web interface, a FastAPI service, and PostgreSQL/Supabase storage. Attendance
-can be captured with face, liveness, and GPS checks while offline, queued on the
-device, and synchronized when connectivity returns.
+AGILA is an undergraduate Computer Science thesis prototype for construction
+field-personnel attendance. It combines an Android application, a Fleet Manager
+web application, a FastAPI backend, and PostgreSQL/Supabase storage. Facial
+verification, pose-based liveness, and GPS checks run on the phone; accepted
+attendance is encrypted locally and synchronized when connectivity returns.
 
-## Main features
+The official thesis title is **Cross-Platform CNN-Based Mobile Facial Recognition
+Attendance System with GPS Authentication**. The implemented mobile client is
+Android-only. This public release contains selected application and model source;
+it does not contain the private thesis workspace or its development history.
 
-- Driver activation, authentication, and assigned-delivery retrieval
-- Local facial enrollment and 128-dimensional embedding comparison
-- YuNet face detection and MediaPipe-based challenge-response liveness checks
-- GPS validation against a manager-configured attendance radius
-- Encrypted local attendance queue with idempotent synchronization
-- Fleet Manager dashboard for drivers, deliveries, attendance, and audit events
-- FastAPI authorization boundary backed by PostgreSQL/Supabase
+## Features
 
-## Architecture
+- Field Personnel activation, sign-in, deactivation, and history-preserving deletion
+- Site Locations with configurable GPS radii and ordered multi-stop Site Assignments
+- Latest Site Assignment, per-site progress, offline attendance, and idempotent sync
+- Fleet Manager personnel, assignment, location, attendance, and audit management
+- Manager-approved face re-registration with atomic local template replacement
+- One authorized app installation per account, signed device proofs, and
+  manager-reviewed device replacement
+- Paginated web records, responsive navigation, and updated attendance messages
 
-The Flutter app performs camera capture, liveness, face inference, GPS checks,
-and offline queuing on the Android device. When online, it authenticates to the
-FastAPI API and synchronizes attendance records. FastAPI validates identity,
-assignment, time, and geofence data before writing through SQLAlchemy to
-PostgreSQL. The browser dashboard is served by the same backend and never
-connects directly to the database.
+Device authorization is a later engineering correction. Automated tests cover
+it; physical two-phone verification is still required. Development biometric
+testing tools are gated out of release builds. User-facing terminology uses
+Field Personnel and Site Assignments; existing Driver/delivery identifiers are
+retained internally for compatibility.
 
-## Technology stack
+## Architecture and technology
 
-- Flutter/Dart and native Kotlin for Android
-- ONNX Runtime Android, OpenCV YuNet, and MediaPipe Tasks Vision
-- Python 3.11, FastAPI, SQLAlchemy, and psycopg
-- PostgreSQL or Supabase PostgreSQL
-- HTML, CSS, JavaScript, Leaflet, and OpenStreetMap
-- Docker for backend/dashboard deployment
+```text
+Android (Flutter/Dart + Kotlin)
+  camera → YuNet alignment → MerLens embedding → pose/GPS checks → encrypted queue
+                               │ authenticated HTTPS + device proofs
+                               ▼
+Fleet Manager browser ← FastAPI (Python/SQLAlchemy) → PostgreSQL/Supabase
+```
+
+The browser is served by FastAPI and never connects directly to the database.
+Facial templates and images are not uploaded. The server enforces account,
+device, assignment, timing, and geofence rules; it does not rerun face inference.
+
+The stack uses Flutter, ONNX Runtime Android, OpenCV YuNet, MediaPipe Face
+Landmarker, FastAPI/Uvicorn, SQLAlchemy/psycopg, PostgreSQL, and HTML/CSS/JavaScript
+with Leaflet/OpenStreetMap. Montserrat's font notice is in
+[docs/licenses/Montserrat-OFL.txt](docs/licenses/Montserrat-OFL.txt).
 
 ## Repository structure
 
-```text
-backend/             FastAPI API, authentication, persistence, and tests
-dashboard/           Fleet Manager web interface
-mobile_app/          Flutter Android application and tests
-ai/                  Final MerLens V2 development, evaluation, and export code
-docs/                Concise model-development and export documentation
-supabase/migrations/ PostgreSQL schema migrations
-Dockerfile           Backend/dashboard container
-```
+| Path | Contents |
+| --- | --- |
+| `backend/` | API, security, persistence, configuration template, and tests |
+| `dashboard/` | Fleet Manager web application and AGILA branding |
+| `mobile_app/` | Android application, native bridges, and tests |
+| `supabase/migrations/` | Ordered database setup and feature migrations |
+| `ai/` | MerLens architecture, preprocessing, curriculum, evaluation, export, and tests |
+| `docs/` | Public model documentation, database setup, and asset notices |
+| `Dockerfile` | Backend and dashboard container |
 
 ## Prerequisites
 
-- Python 3.11
-- PostgreSQL 15+ or a Supabase PostgreSQL project
-- Flutter SDK with Android tooling and Java 17
-- Docker (optional)
+- Python 3.11+ compatible with the pinned backend dependencies
+- A dedicated empty development PostgreSQL/Supabase database
+- Flutter/Dart satisfying `mobile_app/pubspec.yaml` (Dart `^3.12.2`), Android
+  tooling, Java 17, and Android API 24+ on the device
+- Docker Engine for container use
 
-## Backend and Fleet Manager setup
+## Database and backend setup
 
-1. Create a virtual environment and install dependencies:
-
-   ```powershell
-   python -m venv backend/.venv
-   backend/.venv/Scripts/python.exe -m pip install -r backend/requirements.txt
-   ```
-
-2. Copy `backend/.env.example` to the ignored `backend/.env`, replace every
-   placeholder locally, and inject those variables into the process. The
-   application intentionally does not load `.env` automatically.
-3. Review and apply the migrations in `supabase/migrations/` to the intended
-   empty development database.
-4. Create the first Fleet Manager account and run the server:
+1. Read [database setup](docs/database-setup.md). Review the migrations in
+   filename order before applying them to an **empty disposable development
+   database**. The historical chain contains a destructive application-schema
+   reset; never apply the full chain to an existing or production database.
+2. Provision a separate PostgreSQL login with membership in `fleet_backend`.
+   Application queries must not run as the database administrator.
+3. Create a backend environment and configuration file:
 
    ```powershell
-   backend/.venv/Scripts/python.exe -m backend.scripts.bootstrap_manager --login-id manager
-   backend/.venv/Scripts/python.exe -m backend.server --host 127.0.0.1 --port 8080
+   python -m venv .venv
+   .venv/Scripts/python.exe -m pip install -r backend/requirements-dev.txt
+   Copy-Item backend/.env.example backend/.env
    ```
 
-5. Open `http://127.0.0.1:8080/login`. The API and Fleet Manager interface are
-   served together.
+4. Replace the database and JWT placeholders in the ignored `backend/.env`.
+   For local HTTP, use `ENVIRONMENT=development`, `COOKIE_SECURE=false`,
+   `ALLOWED_HOSTS=localhost,127.0.0.1`, and `BACKEND_HOST=127.0.0.1`.
+   The application does **not** load `.env` automatically. Inject its values
+   into your shell using your environment manager before starting Python.
+5. Bootstrap the first manager (the command prompts for the password), then run:
 
-Required environment-variable names are:
+   ```powershell
+   .venv/Scripts/python.exe -m backend.scripts.bootstrap_manager --login-id manager
+   .venv/Scripts/python.exe -m backend.server --host 127.0.0.1 --port 8080
+   ```
 
-```text
-DATABASE_URL
-JWT_SECRET
-ENVIRONMENT
-COOKIE_SECURE
-ALLOWED_HOSTS
-CORS_ALLOWED_ORIGINS
-BACKEND_HOST
-PORT
-ACCESS_TOKEN_MINUTES
-REFRESH_TOKEN_HOURS
-ACTIVATION_CODE_HOURS
-ACTIVATION_MAX_ATTEMPTS
-AUTH_RATE_LIMIT_ATTEMPTS
-AUTH_RATE_LIMIT_WINDOW_SECONDS
-ATTENDANCE_MAX_AGE_DAYS
-ATTENDANCE_FUTURE_MINUTES
-MAX_REQUEST_BYTES
-ENABLE_API_DOCS
+Open `http://127.0.0.1:8080/login`. `/health` is the lightweight reachability
+endpoint. Later devices for existing accounts need manager authorization; a
+fresh activation can authorize the first installation.
+
+## Docker
+
+The existing Dockerfile builds only the backend and Fleet Manager web app. It
+uses Python 3.11, installs pinned backend requirements, serves the dashboard from
+the same origin, runs as an unprivileged user, exposes port 8080, and probes
+`/health`. Credentials are supplied at runtime.
+
+After configuring the database and `backend/.env` above, local HTTP testing:
+
+```powershell
+docker build -t agila .
+docker run --rm --name agila -p 127.0.0.1:8080:8080 --env-file backend/.env -e BACKEND_HOST=0.0.0.0 -e ENVIRONMENT=development -e COOKIE_SECURE=false -e ALLOWED_HOSTS=localhost,127.0.0.1 agila
 ```
 
-## Mobile setup
+Use a database hostname reachable **from the container**; host-machine
+`localhost` refers to the container itself. On Docker Desktop,
+`host.docker.internal` can address a host database. Visit `/login` and `/health`
+at the local address above. Bootstrap a manager with the same configured
+environment using `docker exec -it agila python -m backend.scripts.bootstrap_manager --login-id manager`.
 
-The final MerLens V2 embedding model is included. Before building, obtain the
-remaining reviewed runtime assets and place them at the paths declared in
-`mobile_app/pubspec.yaml`:
+For hosting, use an HTTPS reverse proxy, `ENVIRONMENT=production`,
+`COOKIE_SECURE=true`, explicit `ALLOWED_HOSTS`, and a PostgreSQL connection with
+`sslmode=require`. Keep secrets in the hosting platform. No production deployment
+is performed by this release update. Docker configuration was statically reviewed;
+a container build/smoke test could not run because the local Docker engine was
+unavailable.
 
-```text
-mobile_app/assets/models/face_detection_yunet_2023mar.onnx
-mobile_app/assets/models/face_landmarker.task
-mobile_app/assets/diagnostics/yunet_validation.png
-```
+## Android setup
 
-YuNet and Face Landmarker must be obtained from their official sources with the
-applicable license notices preserved. Do not use facial or participant images
-as the diagnostic image unless their public use is separately authorized.
+The existing final inference-only MerLens ONNX is retained in
+`mobile_app/assets/models/`. Independently obtain the remaining runtime assets
+from their official sources, verify them, and preserve the applicable notices:
 
-Then run:
+- `face_detection_yunet_2023mar.onnx` — [OpenCV Zoo YuNet](https://github.com/opencv/opencv_zoo/tree/4.10.0/models/face_detection_yunet)
+- `face_landmarker.task` — [MediaPipe Face Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker)
+
+See the [runtime asset guide](mobile_app/assets/models/README.md). A diagnostic
+face image is no longer required. Then:
 
 ```powershell
 cd mobile_app
 flutter pub get
+flutter analyze
 flutter test
-flutter run --dart-define=API_BASE_URL=http://127.0.0.1:8080
+flutter run --dart-define=API_BASE_URL=https://YOUR-BACKEND-HOST
 ```
 
-Use an HTTPS API origin for release builds. Release signing requires a private,
-ignored `mobile_app/android/key.properties` created from
-`key.properties.example`; signing keys are never stored in this repository.
+For local debug HTTP, point to an address reachable from the phone/emulator and
+allow that backend hostname. Release builds require HTTPS. Create your own
+ignored signing configuration from `android/key.properties.example`; signing
+keys, passwords, APKs, and build caches are excluded from Git. This repository
+does not supply a signed APK or claim that a fresh device installation was tested.
 
-## Deployment
+## Environment variables
 
-The Docker image serves FastAPI and the dashboard together. Supply environment
-variables through the hosting platform and deploy with an explicit HTTPS host,
-secure cookies, an allowlisted hostname, and an SSL PostgreSQL connection. A
-typical build is `docker build -t agila .`; publish or run it only after adding
-real secrets through the deployment platform, never the image or Git.
+[backend/.env.example](backend/.env.example) is the complete placeholder template.
+Required secrets: `DATABASE_URL` and `JWT_SECRET` (at least 32 random bytes).
 
-## Model and inference boundary
+Runtime configuration: `ENVIRONMENT`, `COOKIE_SECURE`, `ALLOWED_HOSTS`,
+`CORS_ALLOWED_ORIGINS`, `BACKEND_HOST`, `PORT`, `ACCESS_TOKEN_MINUTES`,
+`REFRESH_TOKEN_HOURS`, `ACTIVATION_CODE_HOURS`, `ACTIVATION_MAX_ATTEMPTS`,
+`AUTH_RATE_LIMIT_ATTEMPTS`, `AUTH_RATE_LIMIT_WINDOW_SECONDS`,
+`ATTENDANCE_MAX_AGE_DAYS`, `ATTENDANCE_FUTURE_MINUTES`, `MAX_REQUEST_BYTES`,
+and `ENABLE_API_DOCS`. Mobile `API_BASE_URL` is a Dart build-time value.
 
-The Android client aligns a single YuNet-detected face to 224 x 224 RGB,
-normalizes it, runs a compact MerLens V2 ONNX embedding model, and compares
-unit-normalized embeddings with cosine similarity. Liveness is a separate
-MediaPipe-assisted head-turn and color-response workflow. The server records
-the device decision but does not independently rerun biometric inference.
+## Model and research boundary
 
-The public repository includes the final architecture, progressive
-identity-curriculum training code, preprocessing, verification, LFW evaluation,
-ONNX export/parity code, and focused tests. See
-[`docs/model-development.md`](docs/model-development.md) and
-[`docs/model-export.md`](docs/model-export.md). The final inference-only ONNX
-model is included; datasets, face images, training checkpoints, embeddings, and
-run outputs remain excluded.
+MerLens V2 is a project-authored CNN trained from random initialization, producing
+128-dimensional normalized embeddings from aligned 224 × 224 RGB faces. YuNet
+is the separate pretrained detector; MediaPipe supplies pose signals. Current
+application cosine threshold is provisional `0.35`; all three individual scores
+and the aggregate must satisfy the production verification rule. Active liveness
+uses head turns and centered return; the unreliable color-response gate was removed.
 
-## Model-use restriction
+Historical internal synthetic validation reported 98.42% accuracy and 1.58% EER
+at `0.2071264386`. The historical fixed-threshold LFW evaluation reported 73.10%
+accuracy, 35.20% FAR, and 18.60% FRR. These results do not validate runtime `0.35`,
+constitute on-device accuracy, or establish presentation-attack resistance.
+Participant studies and later engineering changes are separate evidence; this
+release does not publish participant records or claim production readiness.
+See [model development](docs/model-development.md),
+[export](docs/model-export.md), and [model card](docs/model-card.md).
 
-MerLens V2 was trained using DigiFace-1M under Microsoft's Research Use of Data
-Agreement (R-UDA) v1.0. The R-UDA permits non-commercial computational research
-but prohibits using the data or resulting model in a commercial offering,
-including products or services. See [`docs/model-card.md`](docs/model-card.md)
-and the [official DigiFace-1M license](https://github.com/microsoft/DigiFace1M/blob/main/LICENSE)
-before downloading or using the model.
+DigiFace-1M's [R-UDA](https://github.com/microsoft/DigiFace1M/blob/main/LICENSE)
+defines trained models as Results and prohibits commercial use of Data or
+Results. The retained model is intended for non-commercial academic research;
+no broader software license or third-party redistribution permission is implied.
+Dataset images, checkpoints, embeddings, and experiment outputs are excluded.
 
-## Limitations
+## Thesis manuscript
 
-AGILA is an Android-only thesis prototype, not a certified biometric or
-anti-spoofing product. Liveness thresholds require broader device and lighting
-calibration; formal participant usability and attack testing remain incomplete.
-External face evaluation produced mixed results, so no universal accuracy or
-security claim is made. GPS can also be affected by device conditions or
-spoofing. Production use would require legal/privacy review, operational
-monitoring, key management, signed releases, and additional field validation.
+The final manuscript has not yet been supplied for public release. No draft or
+older manuscript is included; publication will wait for the authors' final file.
+
+## Verification
+
+```powershell
+.venv/Scripts/python.exe -m pytest backend/tests -q
+.venv/Scripts/python.exe -m ruff check backend
+node --check dashboard/app.js
+cd mobile_app
+flutter analyze
+flutter test
+```
+
+Backend tests use synthetic accounts and disposable SQLite fixtures; runtime
+configuration requires PostgreSQL. No training, expensive biometric evaluation,
+participant collection, production database operation, or deployment is required
+for these checks.

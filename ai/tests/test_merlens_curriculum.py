@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from itertools import pairwise
-
 import numpy as np
 import torch
 from torch import nn
@@ -41,11 +39,9 @@ class _TinyEmbedding(nn.Module):
 
 def test_curriculum_identity_sets_are_deterministic_nested_and_stable() -> None:
     mapping = tuple(f"identity_{index:06d}" for index in range(92_329))
-    selections = [
-        nested_stage_identities(mapping, count) for count in CURRICULUM_STAGES
-    ]
+    selections = [nested_stage_identities(mapping, count) for count in CURRICULUM_STAGES]
     assert [len(item) for item in selections] == list(CURRICULUM_STAGES)
-    for earlier, later in pairwise(selections):
+    for earlier, later in zip(selections[:-1], selections[1:], strict=True):
         assert later[: len(earlier)] == earlier
     assert identity_manifest_sha256(selections[0]) == identity_manifest_sha256(
         nested_stage_identities(mapping, 256)
@@ -73,9 +69,7 @@ def test_expansion_does_not_change_model_bn_or_fixed_embeddings() -> None:
     expanded = expand_arcface_head(old, 32, seed=101)
     before = {key: value.clone() for key, value in model.state_dict().items()}
     verify_expansion(model, old, expanded, fixed)
-    assert all(
-        torch.equal(before[key], value) for key, value in model.state_dict().items()
-    )
+    assert all(torch.equal(before[key], value) for key, value in model.state_dict().items())
 
 
 def test_health_gate_passes_healthy_and_stops_rank_one_collapse() -> None:
@@ -160,12 +154,9 @@ def test_continuous_controller_transitions_after_healthy_ready() -> None:
 
     outcome = execute_training_mode("continuous", "approved", epoch_runner=runner)
     assert outcome["actions"] == ["transition_next_stage", "stop_failed"]
-    assert (
-        controller_action(
-            _epoch_result(health="HEALTHY", ready=True, stage=5, epoch=12)
-        )
-        == "stop_complete"
-    )
+    assert controller_action(
+        _epoch_result(health="HEALTHY", ready=True, stage=5, epoch=12)
+    ) == "stop_complete"
 
 
 def test_continuous_controller_stops_immediately_on_failed_health() -> None:

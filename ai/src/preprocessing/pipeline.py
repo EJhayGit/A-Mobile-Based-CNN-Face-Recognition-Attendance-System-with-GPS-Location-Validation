@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import numpy as np
 from numpy.typing import NDArray
+import numpy as np
 
 from .alignment import align_face
 from .tensor import prepare_recognition_input

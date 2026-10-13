@@ -13,19 +13,28 @@
       integrity="sha256-p4NxAoJBhIINfQ3ynhLwgiJZME5oKp4rRmrPBFAfM4="
       crossorigin=""
     />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260814-agila" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260911-security-spacing" />
   </head>
   <body>
-    <aside class="sidebar">
+    <button
+      id="mobile-menu-toggle"
+      class="mobile-menu-toggle"
+      type="button"
+      aria-label="Open navigation menu"
+      aria-controls="primary-sidebar"
+      aria-expanded="false"
+    >☰</button>
+    <aside id="primary-sidebar" class="sidebar">
+      <button id="mobile-menu-close" class="mobile-menu-close" type="button" aria-label="Close navigation menu">×</button>
       <a class="brand" href="/" aria-label="AGILA Fleet Manager dashboard">
         <img class="brand-logo" src="/assets/agila-logo.png" alt="" /><span class="brand-copy">AGILA</span>
       </a>
       <nav aria-label="Primary navigation">
         <a data-nav="/" href="/"><span data-icon="dashboard"></span><span>Dashboard</span></a>
-        <a data-nav="/drivers" href="/drivers"><span data-icon="drivers"></span><span>Drivers</span></a>
-        <a data-nav="/deliveries" href="/deliveries"><span data-icon="delivery"></span><span>Deliveries</span></a>
+        <a data-nav="/drivers" href="/drivers"><span data-icon="drivers"></span><span>Field Personnel</span></a>
+        <a data-nav="/deliveries" href="/deliveries"><span data-icon="delivery"></span><span>Site Assignments</span></a>
         <a data-nav="/attendance" href="/attendance"><span data-icon="attendance"></span><span>Attendance</span></a>
-        <a data-nav="/audit" href="/audit"><span data-icon="audit"></span><span>Audit</span></a>
+        <a data-nav="/audit" href="/audit"><span data-icon="audit"></span><span>Site Activity</span></a>
       </nav>
       <div class="session">
         <div class="manager-chip"><span class="avatar">FM</span><span><small>Fleet Manager</small><strong id="manager-name">Signed in</strong></span></div>
@@ -33,6 +42,7 @@
         <button id="logout" class="nav-button" type="button"><span data-icon="logout"></span><span>Logout</span></button>
       </div>
     </aside>
+    <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
     <main id="app" tabindex="-1"><div class="loading-card">Loading fleet workspace…</div></main>
     <div id="toast" role="status" aria-live="polite"></div>
     <script
@@ -40,6 +50,6 @@
       integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
       crossorigin=""
     ></script>
-    <script src="/assets/app.js?v=20260814-driver-actions"></script>
+    <script src="/assets/app.js?v=20260911-device-authorization-responsive-sidebar"></script>
   </body>
 </html>

@@ -1,8 +1,8 @@
-"""Final MerLens V2 model components."""
+"""Active MerLens V2 facial-embedding components."""
 
 from .arcface import ArcFaceTrainingHead
 from .build import build_merlens_model
-from .checkpoint import load_merlens_checkpoint
+from .checkpoint_io import load_merlens_checkpoint
 from .merlens import MERLENS_V2_STAGES, MerLensContextBlock, MerLensV2FaceEmbedding
 
 __all__ = [

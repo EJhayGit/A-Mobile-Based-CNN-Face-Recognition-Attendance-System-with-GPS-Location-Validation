@@ -25,7 +25,7 @@ protobuf layout. Training checkpoints remain private and excluded. The public
 source retains the reproducible export path:
 
 ```text
-ai/src/models/checkpoint.py   Strict MerLens curriculum-checkpoint loader
+ai/src/models/checkpoint_io.py   Strict MerLens curriculum-checkpoint loader
 ai/src/export/export_onnx.py  Dynamic-batch FP32 opset-18 export
 ai/src/export/final_export.py Graph checks and full validation parity
 ai/configs/merlens_curriculum_final.yaml  Recorded final hashes and metrics

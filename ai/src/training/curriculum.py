@@ -8,11 +8,10 @@ import os
 import random
 import subprocess
 import time
-from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Sequence
 
 import numpy as np
 import torch
@@ -22,11 +21,7 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 from ai.src.datasets.aligned import AlignedFaceDataset
 from ai.src.datasets.digiface import DatasetIntegrityError
 from ai.src.datasets.manifest import sha256_file
-from ai.src.evaluation import (
-    calibrate_threshold,
-    generate_verification_pairs,
-    pair_scores,
-)
+from ai.src.evaluation import calibrate_threshold, generate_verification_pairs, pair_scores
 from ai.src.models import ArcFaceTrainingHead, build_merlens_model
 
 CURRICULUM_STAGES = (256, 2_048, 8_192, 32_768, 92_329)
@@ -126,19 +121,13 @@ def _capture_random_state(generator: torch.Generator) -> dict[str, object]:
         "python": random.getstate(),
         "numpy": _numpy_random_state(),
         "torch_cpu": torch.random.get_rng_state(),
-        "torch_cuda": torch.cuda.get_rng_state_all()
-        if torch.cuda.is_available()
-        else [],
+        "torch_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
         "loader_generator": generator.get_state(),
     }
 
 
 def _cpu_rng_state(value: object) -> torch.Tensor:
-    if (
-        not isinstance(value, torch.Tensor)
-        or value.dtype != torch.uint8
-        or value.ndim != 1
-    ):
+    if not isinstance(value, torch.Tensor) or value.dtype != torch.uint8 or value.ndim != 1:
         raise TypeError("RNG state must be a one-dimensional byte tensor")
     return value.detach().cpu()
 
@@ -158,10 +147,7 @@ def _restore_random_state(state: dict[str, object], generator: torch.Generator) 
         cuda_states = state["torch_cuda"]
         restored_cuda: list[torch.Tensor] = []
         if torch.cuda.is_available():
-            if (
-                not isinstance(cuda_states, list)
-                or len(cuda_states) != torch.cuda.device_count()
-            ):
+            if not isinstance(cuda_states, list) or len(cuda_states) != torch.cuda.device_count():
                 raise DatasetIntegrityError("resume CUDA random state is incompatible")
             restored_cuda = [_cpu_rng_state(item) for item in cuda_states]
         random.setstate(state["python"])
@@ -191,7 +177,7 @@ def _atomic_json_write(payload: dict[str, Any], path: Path) -> None:
 
 
 def _duration_text(seconds: float) -> str:
-    value = max(0, round(seconds))
+    value = max(0, int(round(seconds)))
     hours, remainder = divmod(value, 3600)
     minutes, seconds_value = divmod(remainder, 60)
     if hours:
@@ -224,9 +210,7 @@ def format_live_summary(
     full_epochs_to_minimum = max(0, minimum_epoch - epoch)
     minimum_eta = epoch_eta + full_epochs_to_minimum * previous_epoch_seconds
     if latest is None:
-        validation = (
-            "Val acc n/a | EER n/a | rank n/a | PC1 n/a | health Pending | ready false"
-        )
+        validation = "Val acc n/a | EER n/a | rank n/a | PC1 n/a | health Pending | ready false"
     else:
         validation = (
             f"Val acc {float(latest['validation_accuracy']):.4f} | "
@@ -269,9 +253,7 @@ def repository_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-def load_curriculum_configuration(
-    root: Path | None = None,
-) -> tuple[dict[str, Any], CurriculumConfig]:
+def load_curriculum_configuration(root: Path | None = None) -> tuple[dict[str, Any], CurriculumConfig]:
     root = repository_root() if root is None else root
     payload = yaml.safe_load(
         (root / "ai/configs/merlens_curriculum.yaml").read_text(encoding="utf-8")
@@ -304,13 +286,9 @@ def preprocessing_identity_mapping(manifest: str | Path) -> tuple[str, ...]:
         for row in reader:
             if row["status"] == "accepted":
                 counts[row["identity"]] = counts.get(row["identity"], 0) + 1
-    identities = tuple(
-        sorted(identity for identity, count in counts.items() if count >= 2)
-    )
+    identities = tuple(sorted(identity for identity, count in counts.items() if count >= 2))
     if len(identities) < 2:
-        raise DatasetIntegrityError(
-            "preprocessing manifest has too few usable identities"
-        )
+        raise DatasetIntegrityError("preprocessing manifest has too few usable identities")
     return identities
 
 
@@ -323,9 +301,7 @@ def nested_stage_identities(
         raise DatasetIntegrityError("training mapping is smaller than the stage")
     selected = tuple(full_mapping[:identity_count])
     if len(set(selected)) != identity_count or selected != tuple(sorted(selected)):
-        raise DatasetIntegrityError(
-            "training identity mapping is not stable and sorted"
-        )
+        raise DatasetIntegrityError("training identity mapping is not stable and sorted")
     return selected
 
 
@@ -333,9 +309,7 @@ def identity_manifest_sha256(identities: Sequence[str]) -> str:
     return sha256(("\n".join(identities) + "\n").encode("utf-8")).hexdigest()
 
 
-def _head_with_seed(
-    num_classes: int, seed: int, device: torch.device
-) -> ArcFaceTrainingHead:
+def _head_with_seed(num_classes: int, seed: int, device: torch.device) -> ArcFaceTrainingHead:
     devices = [device.index or 0] if device.type == "cuda" else []
     with torch.random.fork_rng(devices=devices):
         torch.manual_seed(seed)
@@ -359,7 +333,9 @@ def expand_arcface_head(
     expanded = _head_with_seed(new_class_count, seed, device)
     with torch.no_grad():
         expanded.class_centers[:, :old_count].copy_(previous.class_centers)
-    if not torch.equal(expanded.class_centers[:, :old_count], previous.class_centers):
+    if not torch.equal(
+        expanded.class_centers[:, :old_count], previous.class_centers
+    ):
         raise RuntimeError("old ArcFace centers changed during expansion")
     return expanded
 
@@ -392,23 +368,16 @@ def verify_expansion(
     new_head: ArcFaceTrainingHead,
     fixed_inputs: torch.Tensor,
 ) -> None:
-    before_state = {
-        key: value.detach().clone() for key, value in model.state_dict().items()
-    }
+    before_state = {key: value.detach().clone() for key, value in model.state_dict().items()}
     was_training = model.training
     model.eval()
     with torch.inference_mode():
         before_embeddings = model(fixed_inputs).detach().clone()
         after_embeddings = model(fixed_inputs).detach().clone()
     model.train(was_training)
-    if any(
-        not torch.equal(before_state[key], value)
-        for key, value in model.state_dict().items()
-    ):
+    if any(not torch.equal(before_state[key], value) for key, value in model.state_dict().items()):
         raise RuntimeError("model or BN state changed during classifier expansion")
-    if not torch.equal(
-        old_head.class_centers, new_head.class_centers[:, : old_head.num_classes]
-    ):
+    if not torch.equal(old_head.class_centers, new_head.class_centers[:, : old_head.num_classes]):
         raise RuntimeError("old ArcFace centers changed during classifier expansion")
     if not torch.equal(before_embeddings, after_embeddings):
         raise RuntimeError("fixed embeddings changed during classifier expansion")
@@ -519,7 +488,8 @@ def inspect_preflight(root: Path | None = None) -> CurriculumPreflight:
             train_image_count = sum(
                 1
                 for row in csv.DictReader(stream)
-                if row["status"] == "accepted" and row["identity"] in stage_identity_set
+                if row["status"] == "accepted"
+                and row["identity"] in stage_identity_set
             )
         if len(train_mapping) != CURRICULUM_STAGES[-1]:
             issues.append("full usable training identity count is not 92,329")
@@ -531,14 +501,10 @@ def inspect_preflight(root: Path | None = None) -> CurriculumPreflight:
     cuda = torch.cuda.is_available()
     if not cuda:
         issues.append("CUDA is unavailable")
-    selected = (
-        nested_stage_identities(train_mapping, 256) if len(train_mapping) >= 256 else ()
-    )
+    selected = nested_stage_identities(train_mapping, 256) if len(train_mapping) >= 256 else ()
     return CurriculumPreflight(
         curriculum_valid=not any(
-            issue
-            for issue in issues
-            if issue not in ("worktree is not clean", "CUDA is unavailable")
+            issue for issue in issues if issue not in ("worktree is not clean", "CUDA is unavailable")
         ),
         ready_for_training=not issues,
         cuda_available=cuda,
@@ -549,9 +515,7 @@ def inspect_preflight(root: Path | None = None) -> CurriculumPreflight:
         full_train_identity_count=len(train_mapping),
         validation_identity_count=len(validation_mapping),
         identity_manifest_sha256=identity_manifest_sha256(selected) if selected else "",
-        train_validation_disjoint=not bool(
-            set(train_mapping) & set(validation_mapping)
-        ),
+        train_validation_disjoint=not bool(set(train_mapping) & set(validation_mapping)),
         held_out_sealed=True,
         continuation_available=state_path.is_file(),
         worktree_clean=not dirty,
@@ -570,13 +534,8 @@ def _validation_evidence(
     maximum_pairs: int,
 ) -> tuple[Any, np.ndarray, float, float, float, float]:
     model.eval()
-    loader = DataLoader(
-        dataset, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=True
-    )
-    batches = [
-        model(inputs.to(device, non_blocking=True)).cpu().numpy()
-        for inputs, _ in loader
-    ]
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=True)
+    batches = [model(inputs.to(device, non_blocking=True)).cpu().numpy() for inputs, _ in loader]
     embeddings = np.concatenate(batches)
     pairs = generate_verification_pairs(
         dataset.records,
@@ -637,14 +596,9 @@ def load_state(
     device: torch.device,
     config: CurriculumConfig,
     generator: torch.Generator,
-) -> tuple[
-    torch.nn.Module, ArcFaceTrainingHead, torch.optim.Optimizer, Any, dict[str, Any]
-]:
+) -> tuple[torch.nn.Module, ArcFaceTrainingHead, torch.optim.Optimizer, Any, dict[str, Any]]:
     payload = torch.load(path, map_location=device, weights_only=True)
-    if (
-        payload.get("schema_version") != STATE_SCHEMA_VERSION
-        or payload.get("run_name") != RUN_NAME
-    ):
+    if payload.get("schema_version") != STATE_SCHEMA_VERSION or payload.get("run_name") != RUN_NAME:
         raise DatasetIntegrityError("unsupported curriculum state")
     stage_index = int(payload["stage_index"])
     identity_count = CURRICULUM_STAGES[stage_index]
@@ -668,9 +622,7 @@ def run_one_epoch(*, approval_token: str, root: Path | None = None) -> dict[str,
     root = repository_root() if root is None else root
     preflight = inspect_preflight(root)
     if not preflight.ready_for_training:
-        raise RuntimeError(
-            "curriculum preflight failed: " + "; ".join(preflight.issues)
-        )
+        raise RuntimeError("curriculum preflight failed: " + "; ".join(preflight.issues))
     payload, config = load_curriculum_configuration(root)
     data = payload["data"]
     train_manifest = root / data["train_manifest"]
@@ -682,9 +634,7 @@ def run_one_epoch(*, approval_token: str, root: Path | None = None) -> dict[str,
     generator = torch.Generator().manual_seed(config.seed)
     full_mapping = preprocessing_identity_mapping(train_manifest)
     stage_index = 0
-    stage_identities = nested_stage_identities(
-        full_mapping, CURRICULUM_STAGES[stage_index]
-    )
+    stage_identities = nested_stage_identities(full_mapping, CURRICULUM_STAGES[stage_index])
     history: list[dict[str, Any]] = []
     transition = {"optimizer": "initial_clean_state", "verified": True}
     if state_path.is_file():
@@ -805,16 +755,8 @@ def run_one_epoch(*, approval_token: str, root: Path | None = None) -> dict[str,
         if not torch.isfinite(loss):
             raise FloatingPointError("curriculum loss became non-finite")
         loss.backward()
-        gradients = [
-            parameter.grad
-            for parameter in [*model.parameters(), *head.parameters()]
-            if parameter.grad is not None
-        ]
-        finite_gradients = (
-            finite_gradients
-            and bool(gradients)
-            and all(torch.isfinite(item).all() for item in gradients)
-        )
+        gradients = [parameter.grad for parameter in [*model.parameters(), *head.parameters()] if parameter.grad is not None]
+        finite_gradients = finite_gradients and bool(gradients) and all(torch.isfinite(item).all() for item in gradients)
         if not finite_gradients:
             raise FloatingPointError("curriculum gradient became non-finite")
         norm = torch.nn.utils.clip_grad_norm_(
@@ -825,7 +767,10 @@ def run_one_epoch(*, approval_token: str, root: Path | None = None) -> dict[str,
         count = labels.shape[0]
         loss_sum += float(loss.detach()) * count
         samples += count
-        if batch_index % PROGRESS_INTERVAL_BATCHES == 0 or batch_index == len(loader):
+        if (
+            batch_index % PROGRESS_INTERVAL_BATCHES == 0
+            or batch_index == len(loader)
+        ):
             print(
                 format_live_summary(
                     stage=stage_index + 1,
@@ -923,9 +868,7 @@ def run_mechanics_test(root: Path | None = None) -> dict[str, Any]:
     old_head = _head_with_seed(16, config.seed, device)
     model.eval()
     fixed = torch.randn(4, 3, 224, 224, device=device)
-    model_state = {
-        key: value.detach().clone() for key, value in model.state_dict().items()
-    }
+    model_state = {key: value.detach().clone() for key, value in model.state_dict().items()}
     with torch.inference_mode():
         embeddings_before = model(fixed).detach().clone()
     expanded = expand_arcface_head(old_head, 32, seed=config.seed + 32)
@@ -993,13 +936,8 @@ def run_mechanics_test(root: Path | None = None) -> dict[str, Any]:
     checkpoint.unlink(missing_ok=True)
     report = {
         "nested_mapping": tuple(range(16)) == tuple(range(32))[:16],
-        "old_centers_preserved": torch.equal(
-            old_head.class_centers, expanded.class_centers[:, :16]
-        ),
-        "model_preserved": all(
-            torch.equal(model_state[key], value)
-            for key, value in model.state_dict().items()
-        ),
+        "old_centers_preserved": torch.equal(old_head.class_centers, expanded.class_centers[:, :16]),
+        "model_preserved": all(torch.equal(model_state[key], value) for key, value in model.state_dict().items()),
         "embeddings_preserved": torch.equal(embeddings_before, embeddings_after),
         "optimizer_transition": "rebuilt_clean_for_expanded_classifier",
         "scheduler_transition": "reset_for_new_stage",

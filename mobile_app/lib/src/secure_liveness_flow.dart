@@ -6,14 +6,12 @@ import 'liveness_runtime.dart';
 
 enum HeadTurnDirection { left, right }
 
-enum ChallengeScreenColor { neutral, white, red, green, blue }
+enum ScreenIllumination { neutral, white }
 
 enum SecureLivenessStage {
   quality,
   headTurn,
   headReturn,
-  colorBaseline,
-  colorChallenge,
   captureStabilizing,
   captureCooldown,
   processing,
@@ -33,40 +31,8 @@ class SecureLivenessRules {
   static const centeredYawDegrees = 8.0;
   static const directionalFrames = 2;
   static const centeredReturnFrames = 2;
-  static const colorBaselineFrames = 3;
-  static const colorSampleWindowFrames = 8;
-  static const colorRequiredMatchingFrames = 2;
-  static const colorTransitionDelay = Duration(milliseconds: 700);
-  static const minimumColorDelta = 8.0;
-  static const colorDominanceMargin = 3.0;
-  static const minimumColorBaselineRegions = 3;
-  static const colorRequiredCoherentRegions = 2;
   static const maximumCenterDisplacement = 0.12;
   static const maximumWidthChangeFraction = 0.20;
-}
-
-class ColorResponseDiagnostic {
-  const ColorResponseDiagnostic({
-    required this.color,
-    required this.sampledFrames,
-    required this.sampleWindowFrames,
-    required this.matchingFrames,
-    required this.requiredMatchingFrames,
-    required this.bestCoherentRegions,
-    required this.requiredCoherentRegions,
-    required this.bestTargetDelta,
-    required this.bestDominanceMargin,
-  });
-
-  final ChallengeScreenColor color;
-  final int sampledFrames;
-  final int sampleWindowFrames;
-  final int matchingFrames;
-  final int requiredMatchingFrames;
-  final int bestCoherentRegions;
-  final int requiredCoherentRegions;
-  final double? bestTargetDelta;
-  final double? bestDominanceMargin;
 }
 
 class HeadTurnDiagnostic {
@@ -112,22 +78,18 @@ class SecureLivenessUpdate {
     required this.captureRequested,
     required this.guidance,
     required this.progress,
-    required this.screenColor,
+    required this.screenIllumination,
     required this.raiseWindowBrightness,
     required this.lowLightIllumination,
-    required this.showPhotosensitivityWarning,
-    required this.colorDiagnostic,
     required this.headTurnDiagnostic,
   });
 
   final bool captureRequested;
   final String guidance;
   final double progress;
-  final ChallengeScreenColor screenColor;
+  final ScreenIllumination screenIllumination;
   final bool raiseWindowBrightness;
   final bool lowLightIllumination;
-  final bool showPhotosensitivityWarning;
-  final ColorResponseDiagnostic? colorDiagnostic;
   final HeadTurnDiagnostic? headTurnDiagnostic;
 }
 
@@ -136,7 +98,7 @@ class SecureLivenessController {
     required this.purpose,
     int Function(int max)? nextRandomInt,
   }) : _nextRandomInt = nextRandomInt ?? math.Random.secure().nextInt {
-    _createFreshChallenge();
+    _createFreshPoseChallenge();
   }
 
   final ScanPurpose purpose;
@@ -144,11 +106,9 @@ class SecureLivenessController {
 
   late String _sessionId;
   late HeadTurnDirection _direction;
-  late List<ChallengeScreenColor> _colorSequence;
   SecureLivenessStage _stage = SecureLivenessStage.quality;
   DateTime? _startedAt;
   DateTime? _nextCaptureAt;
-  DateTime? _colorShownAt;
   MediaPipeObservation? _previousMediaPipe;
   double? _illuminationBaseline;
   double? _centerYawBaseline;
@@ -156,14 +116,6 @@ class SecureLivenessController {
   int _headFrames = 0;
   int _returnFrames = 0;
   HeadTurnDiagnostic? _headTurnDiagnostic;
-  int _colorBaselineCount = 0;
-  final Map<String, List<double>> _colorBaselineSums = {};
-  Map<String, SkinRegionColor> _colorBaseline = const {};
-  int _colorIndex = 0;
-  int _colorSampleFrames = 0;
-  int _colorMatchingFrames = 0;
-  _ColorFrameAssessment? _bestColorAssessment;
-  ColorResponseDiagnostic? _colorDiagnostic;
   int _captureFrames = 0;
   int _completedCaptures = 0;
   int _enrollmentResetToken = 0;
@@ -175,8 +127,6 @@ class SecureLivenessController {
 
   String get sessionId => _sessionId;
   HeadTurnDirection get direction => _direction;
-  List<ChallengeScreenColor> get colorSequence =>
-      List.unmodifiable(_colorSequence);
   SecureLivenessStage get stage => _stage;
   int get completedCaptures => _completedCaptures;
   int get enrollmentResetToken => _enrollmentResetToken;
@@ -284,10 +234,6 @@ class SecureLivenessController {
         _advanceHeadTurn(mediaPipe!);
       case SecureLivenessStage.headReturn:
         _advanceHeadReturn(mediaPipe!);
-      case SecureLivenessStage.colorBaseline:
-        _advanceColorBaseline(mediaPipe!, evidence.now);
-      case SecureLivenessStage.colorChallenge:
-        _advanceColorResponse(mediaPipe!, evidence.now);
       case SecureLivenessStage.captureCooldown:
         if (!evidence.now.isBefore(_nextCaptureAt!)) {
           _stage = SecureLivenessStage.captureStabilizing;
@@ -313,7 +259,9 @@ class SecureLivenessController {
     }
     _captureInFlight = false;
     _completedCaptures++;
-    final requiredCaptures = purpose == ScanPurpose.registration ? 3 : 1;
+    final requiredCaptures = purpose == ScanPurpose.registration
+        ? 3
+        : CameraFlowRules.attendanceVerificationCaptures;
     if (_completedCaptures >= requiredCaptures) {
       _completionLock = true;
       _stage = SecureLivenessStage.completed;
@@ -322,10 +270,17 @@ class SecureLivenessController {
           : 'Processing';
       return;
     }
-    _nextCaptureAt = now.add(CameraFlowRules.enrollmentCaptureSeparation);
+    _nextCaptureAt = now.add(
+      purpose == ScanPurpose.registration
+          ? CameraFlowRules.enrollmentCaptureSeparation
+          : CameraFlowRules.minimumFrameInterval,
+    );
     _stage = SecureLivenessStage.captureCooldown;
     _captureFrames = 0;
-    _guidance = 'Enrollment sample ${_completedCaptures + 1} of 3';
+    _guidance = purpose == ScanPurpose.registration
+        ? 'Enrollment sample ${_completedCaptures + 1} of 3'
+        : 'Verification sample ${_completedCaptures + 1} of '
+              '${CameraFlowRules.attendanceVerificationCaptures}';
   }
 
   void captureFailed(String message) {
@@ -353,10 +308,6 @@ class SecureLivenessController {
     _headFrames = 0;
     _returnFrames = 0;
     _headTurnDiagnostic = null;
-    _resetColorBaseline();
-    _colorIndex = 0;
-    _resetColorResponse();
-    _colorShownAt = null;
     _captureFrames = 0;
     _completedCaptures = 0;
     _captureInFlight = false;
@@ -364,10 +315,10 @@ class SecureLivenessController {
     _completionLock = false;
     _lastMediaPipeTimestamp = -1;
     _guidance = 'Position your face';
-    _createFreshChallenge();
+    _createFreshPoseChallenge();
   }
 
-  void _createFreshChallenge() {
+  void _createFreshPoseChallenge() {
     final random = math.Random.secure();
     final entropy = List.generate(
       16,
@@ -375,14 +326,6 @@ class SecureLivenessController {
     ).join();
     _sessionId = '${DateTime.now().microsecondsSinceEpoch}-$entropy';
     _direction = HeadTurnDirection.values[_nextRandomInt(2)];
-    final colors = <ChallengeScreenColor>[
-      ChallengeScreenColor.red,
-      ChallengeScreenColor.green,
-      ChallengeScreenColor.blue,
-    ];
-    _colorSequence = purpose == ScanPurpose.attendance
-        ? List.unmodifiable([colors[_nextRandomInt(colors.length)]])
-        : const [];
   }
 
   bool _validMediaPipe(MediaPipeObservation? observation) =>
@@ -474,154 +417,11 @@ class SecureLivenessController {
     _headTurnDiagnostic = _headDiagnosticFor(observation.yawDegrees!);
     _guidance = 'Return your head to center';
     if (_returnFrames >= SecureLivenessRules.centeredReturnFrames) {
-      if (purpose == ScanPurpose.registration) {
-        _livenessCompleted = true;
-        _stage = SecureLivenessStage.captureStabilizing;
-        _captureFrames = 0;
-        _guidance = 'Liveness complete; hold still';
-        return;
-      }
-      _stage = SecureLivenessStage.colorBaseline;
-      _resetColorBaseline();
-      _guidance = 'Colors will change slowly; keep looking at the screen';
-    }
-  }
-
-  void _advanceColorBaseline(MediaPipeObservation observation, DateTime now) {
-    if (observation.skinRegions.length <
-        SecureLivenessRules.minimumColorBaselineRegions) {
-      _resetColorBaseline();
-      _guidance = 'Keep your forehead and cheeks visible';
-      return;
-    }
-    for (final entry in observation.skinRegions.entries) {
-      final sums = _colorBaselineSums.putIfAbsent(entry.key, () => [0, 0, 0]);
-      sums[0] += entry.value.red;
-      sums[1] += entry.value.green;
-      sums[2] += entry.value.blue;
-    }
-    _colorBaselineCount++;
-    _guidance = 'Preparing gentle color check';
-    if (_colorBaselineCount < SecureLivenessRules.colorBaselineFrames) return;
-    _colorBaseline = Map.unmodifiable(
-      _colorBaselineSums.map(
-        (name, sums) => MapEntry(
-          name,
-          SkinRegionColor(
-            red: sums[0] / _colorBaselineCount,
-            green: sums[1] / _colorBaselineCount,
-            blue: sums[2] / _colorBaselineCount,
-          ),
-        ),
-      ),
-    );
-    _stage = SecureLivenessStage.colorChallenge;
-    _colorIndex = 0;
-    _resetColorResponse();
-    _colorShownAt = now;
-    _guidance = _colorGuidance(_colorSequence.first);
-  }
-
-  void _advanceColorResponse(MediaPipeObservation observation, DateTime now) {
-    if (now.difference(_colorShownAt!) <
-        SecureLivenessRules.colorTransitionDelay) {
-      _guidance = 'Hold still during the gentle color change';
-      return;
-    }
-    final color = _colorSequence[_colorIndex];
-    final assessment = _assessColorResponse(color, observation.skinRegions);
-    _colorSampleFrames++;
-    if (assessment.matches) _colorMatchingFrames++;
-    final best = _bestColorAssessment;
-    if (best == null || assessment.responseScore > best.responseScore) {
-      _bestColorAssessment = assessment;
-    }
-    final bestAssessment = _bestColorAssessment!;
-    _colorDiagnostic = ColorResponseDiagnostic(
-      color: color,
-      sampledFrames: _colorSampleFrames,
-      sampleWindowFrames: SecureLivenessRules.colorSampleWindowFrames,
-      matchingFrames: _colorMatchingFrames,
-      requiredMatchingFrames: SecureLivenessRules.colorRequiredMatchingFrames,
-      bestCoherentRegions: bestAssessment.coherentRegions,
-      requiredCoherentRegions: SecureLivenessRules.colorRequiredCoherentRegions,
-      bestTargetDelta: bestAssessment.requiredRegionTargetDelta,
-      bestDominanceMargin: bestAssessment.requiredRegionDominanceMargin,
-    );
-    _guidance =
-        'Sampling the ${color.name} response '
-        '$_colorSampleFrames/${SecureLivenessRules.colorSampleWindowFrames}';
-    if (_colorMatchingFrames <
-        SecureLivenessRules.colorRequiredMatchingFrames) {
-      if (_colorSampleFrames >= SecureLivenessRules.colorSampleWindowFrames) {
-        _completionLock = true;
-        _stage = SecureLivenessStage.failed;
-        _guidance = 'Color response not detected; please try again';
-      }
-      return;
-    }
-    _colorIndex++;
-    if (_colorIndex >= _colorSequence.length) {
       _livenessCompleted = true;
       _stage = SecureLivenessStage.captureStabilizing;
       _captureFrames = 0;
       _guidance = 'Liveness complete; hold still';
-      return;
     }
-    _resetColorResponse();
-    _colorShownAt = now;
-    _guidance = _colorGuidance(_colorSequence[_colorIndex]);
-  }
-
-  _ColorFrameAssessment _assessColorResponse(
-    ChallengeScreenColor color,
-    Map<String, SkinRegionColor> current,
-  ) {
-    final regions = <_ColorRegionAssessment>[];
-    for (final entry in _colorBaseline.entries) {
-      final observed = current[entry.key];
-      if (observed == null) continue;
-      final red = observed.red - entry.value.red;
-      final green = observed.green - entry.value.green;
-      final blue = observed.blue - entry.value.blue;
-      final (targetDelta, competitorDelta) = switch (color) {
-        ChallengeScreenColor.red => (red, math.max(green, blue)),
-        ChallengeScreenColor.green => (green, math.max(red, blue)),
-        ChallengeScreenColor.blue => (blue, math.max(red, green)),
-        ChallengeScreenColor.white || ChallengeScreenColor.neutral => (
-          double.negativeInfinity,
-          double.infinity,
-        ),
-      };
-      final dominanceMargin = targetDelta - competitorDelta;
-      final responseScore = math.min(
-        targetDelta / SecureLivenessRules.minimumColorDelta,
-        dominanceMargin / SecureLivenessRules.colorDominanceMargin,
-      );
-      regions.add(
-        _ColorRegionAssessment(
-          targetDelta: targetDelta,
-          dominanceMargin: dominanceMargin,
-          responseScore: responseScore,
-        ),
-      );
-    }
-    regions.sort(
-      (left, right) => right.responseScore.compareTo(left.responseScore),
-    );
-    final coherentRegions = regions
-        .where((region) => region.responseScore >= 1)
-        .length;
-    final requiredIndex = SecureLivenessRules.colorRequiredCoherentRegions - 1;
-    final requiredRegion = regions.length > requiredIndex
-        ? regions[requiredIndex]
-        : null;
-    return _ColorFrameAssessment(
-      coherentRegions: coherentRegions,
-      responseScore: requiredRegion?.responseScore ?? double.negativeInfinity,
-      requiredRegionTargetDelta: requiredRegion?.targetDelta,
-      requiredRegionDominanceMargin: requiredRegion?.dominanceMargin,
-    );
   }
 
   void _advanceCapture(MediaPipeObservation observation) {
@@ -646,9 +446,7 @@ class SecureLivenessController {
 
   bool get _usesActiveLivenessPosition =>
       _stage == SecureLivenessStage.headTurn ||
-      _stage == SecureLivenessStage.headReturn ||
-      _stage == SecureLivenessStage.colorBaseline ||
-      _stage == SecureLivenessStage.colorChallenge;
+      _stage == SecureLivenessStage.headReturn;
 
   void _pauseForActivePosition(FaceObservation observation) {
     switch (_stage) {
@@ -658,10 +456,6 @@ class SecureLivenessController {
       case SecureLivenessStage.headReturn:
         _returnFrames = 0;
         break;
-      case SecureLivenessStage.colorBaseline:
-        _resetColorBaseline();
-        break;
-      case SecureLivenessStage.colorChallenge:
       case SecureLivenessStage.quality:
       case SecureLivenessStage.captureStabilizing:
       case SecureLivenessStage.captureCooldown:
@@ -697,7 +491,7 @@ class SecureLivenessController {
   }
 
   void _resetActiveProgress(String guidance) {
-    if (purpose == ScanPurpose.registration && _completedCaptures > 0) {
+    if (_completedCaptures > 0) {
       _completedCaptures = 0;
       _nextCaptureAt = null;
       _enrollmentResetToken++;
@@ -710,26 +504,9 @@ class SecureLivenessController {
     _headFrames = 0;
     _returnFrames = 0;
     _headTurnDiagnostic = null;
-    _resetColorBaseline();
-    _colorIndex = 0;
-    _resetColorResponse();
-    _colorShownAt = null;
     _captureFrames = 0;
     _livenessCompleted = false;
     _guidance = guidance;
-  }
-
-  void _resetColorBaseline() {
-    _colorBaselineCount = 0;
-    _colorBaselineSums.clear();
-    _colorBaseline = const {};
-  }
-
-  void _resetColorResponse() {
-    _colorSampleFrames = 0;
-    _colorMatchingFrames = 0;
-    _bestColorAssessment = null;
-    _colorDiagnostic = null;
   }
 
   String _positionGuidance(FaceObservation observation) {
@@ -762,19 +539,12 @@ class SecureLivenessController {
     HeadTurnDirection.right => 'Turn your head right',
   };
 
-  String _colorGuidance(ChallengeScreenColor color) =>
-      'Hold still for the ${color.name} light';
-
-  ChallengeScreenColor get _screenColor {
+  ScreenIllumination get _screenIllumination {
     if (_stage == SecureLivenessStage.quality &&
         _illuminationBaseline != null) {
-      return ChallengeScreenColor.white;
+      return ScreenIllumination.white;
     }
-    if (_stage == SecureLivenessStage.colorChallenge &&
-        _colorIndex < _colorSequence.length) {
-      return _colorSequence[_colorIndex];
-    }
-    return ChallengeScreenColor.neutral;
+    return ScreenIllumination.neutral;
   }
 
   SecureLivenessUpdate _update({bool captureRequested = false}) {
@@ -785,13 +555,6 @@ class SecureLivenessController {
         _headFrames / SecureLivenessRules.directionalFrames,
       SecureLivenessStage.headReturn =>
         _returnFrames / SecureLivenessRules.centeredReturnFrames,
-      SecureLivenessStage.colorBaseline =>
-        _colorBaselineCount / SecureLivenessRules.colorBaselineFrames,
-      SecureLivenessStage.colorChallenge =>
-        (_colorIndex +
-                _colorSampleFrames /
-                    SecureLivenessRules.colorSampleWindowFrames) /
-            _colorSequence.length,
       SecureLivenessStage.captureStabilizing =>
         _captureFrames / CameraFlowRules.requiredConsecutiveFrames,
       SecureLivenessStage.captureCooldown => 0,
@@ -800,54 +563,17 @@ class SecureLivenessController {
       SecureLivenessStage.timedOut ||
       SecureLivenessStage.failed => 1,
     };
-    final screenColor = _screenColor;
+    final screenIllumination = _screenIllumination;
     final lowLightIllumination =
         _stage == SecureLivenessStage.quality && _illuminationBaseline != null;
-    final colorIllumination =
-        _stage == SecureLivenessStage.colorBaseline ||
-        _stage == SecureLivenessStage.colorChallenge;
     return SecureLivenessUpdate(
       captureRequested: captureRequested,
       guidance: _guidance,
       progress: progress.clamp(0.0, 1.0).toDouble(),
-      screenColor: screenColor,
-      raiseWindowBrightness:
-          screenColor != ChallengeScreenColor.neutral || colorIllumination,
+      screenIllumination: screenIllumination,
+      raiseWindowBrightness: screenIllumination != ScreenIllumination.neutral,
       lowLightIllumination: lowLightIllumination,
-      showPhotosensitivityWarning:
-          _stage == SecureLivenessStage.colorBaseline ||
-          _stage == SecureLivenessStage.colorChallenge,
-      colorDiagnostic: _colorDiagnostic,
       headTurnDiagnostic: _headTurnDiagnostic,
     );
   }
-}
-
-class _ColorRegionAssessment {
-  const _ColorRegionAssessment({
-    required this.targetDelta,
-    required this.dominanceMargin,
-    required this.responseScore,
-  });
-
-  final double targetDelta;
-  final double dominanceMargin;
-  final double responseScore;
-}
-
-class _ColorFrameAssessment {
-  const _ColorFrameAssessment({
-    required this.coherentRegions,
-    required this.responseScore,
-    required this.requiredRegionTargetDelta,
-    required this.requiredRegionDominanceMargin,
-  });
-
-  final int coherentRegions;
-  final double responseScore;
-  final double? requiredRegionTargetDelta;
-  final double? requiredRegionDominanceMargin;
-
-  bool get matches =>
-      coherentRegions >= SecureLivenessRules.colorRequiredCoherentRegions;
 }

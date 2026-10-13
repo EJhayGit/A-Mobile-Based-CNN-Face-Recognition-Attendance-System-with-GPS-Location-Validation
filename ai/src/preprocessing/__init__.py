@@ -6,11 +6,11 @@ from .tensor import prepare_recognition_input
 from .yunet import FaceDetection, FaceDetectionError, YuNetDetector
 
 __all__ = [
-    "TARGET_LANDMARKS_224",
     "FaceDetection",
     "FaceDetectionError",
     "FacePreprocessor",
     "PreprocessingResult",
+    "TARGET_LANDMARKS_224",
     "YuNetDetector",
     "align_face",
     "prepare_recognition_input",

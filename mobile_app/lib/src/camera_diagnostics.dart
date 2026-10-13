@@ -11,7 +11,6 @@ enum CameraProcessingStage {
   mediaPipeInference,
   livenessEvaluation,
   brightnessControl,
-  colorResponse,
   alignment,
   embeddingInference,
   enrollmentStorage,
@@ -27,7 +26,6 @@ enum CameraScanFailureKind {
   mediaPipeInference,
   livenessProcessing,
   brightnessControl,
-  colorResponse,
   automaticCapture,
   embeddingInference,
   controllerUnavailable,
@@ -98,8 +96,6 @@ class CameraScanFailure {
         CameraScanFailureKind.livenessProcessing,
       CameraProcessingStage.brightnessControl =>
         CameraScanFailureKind.brightnessControl,
-      CameraProcessingStage.colorResponse =>
-        CameraScanFailureKind.colorResponse,
       CameraProcessingStage.alignment => CameraScanFailureKind.automaticCapture,
       CameraProcessingStage.embeddingInference =>
         CameraScanFailureKind.embeddingInference,
@@ -122,8 +118,6 @@ class CameraScanFailure {
       CameraScanFailureKind.livenessProcessing => 'Liveness processing failed',
       CameraScanFailureKind.brightnessControl =>
         'Screen illumination could not be restored safely',
-      CameraScanFailureKind.colorResponse =>
-        'Screen color response processing failed',
       CameraScanFailureKind.automaticCapture => 'Automatic capture failed',
       CameraScanFailureKind.embeddingInference => 'Embedding inference failed',
       CameraScanFailureKind.controllerUnavailable =>

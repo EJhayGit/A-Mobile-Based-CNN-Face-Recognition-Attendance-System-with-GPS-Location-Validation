@@ -1,3 +1,5 @@
+import 'domain.dart';
+
 enum ScanPurpose { registration, attendance }
 
 class CameraFlowRules {
@@ -7,6 +9,8 @@ class CameraFlowRules {
   static const debugReportingThreshold = 0.3;
   static const minimumFrameInterval = Duration(milliseconds: 200);
   static const requiredConsecutiveFrames = 3;
+  static const attendanceVerificationCaptures =
+      attendanceVerificationComparisonCount;
   static const enrollmentCaptureSeparation = Duration(milliseconds: 900);
   static const minimumFaceWidthRatio = 0.34;
   static const maximumFaceWidthRatio = 0.82;

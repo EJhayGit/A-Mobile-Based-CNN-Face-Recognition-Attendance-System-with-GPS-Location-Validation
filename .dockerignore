@@ -20,3 +20,13 @@ archive
 docs
 mobile_app
 supabase
+
+# Exclude nested runtime secrets from the backend build context.
+**/.env
+**/.env.*
+!**/.env.example
+**/key.properties
+**/*.jks
+**/*.keystore
+**/*.pem
+**/*.key

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'domain.dart';
@@ -82,6 +83,7 @@ class AuthView extends StatefulWidget {
     required this.confirmationController,
     required this.onLogin,
     required this.onActivate,
+    required this.onRequestDeviceReplacement,
   });
 
   final bool busy;
@@ -93,6 +95,7 @@ class AuthView extends StatefulWidget {
   final TextEditingController confirmationController;
   final VoidCallback onLogin;
   final VoidCallback onActivate;
+  final VoidCallback onRequestDeviceReplacement;
 
   @override
   State<AuthView> createState() => _AuthViewState();
@@ -135,8 +138,8 @@ class _AuthViewState extends State<AuthView> {
                 const SizedBox(height: 8),
                 Text(
                   _activating
-                      ? 'Activate your secure Driver account to get started.'
-                      : 'Your delivery, attendance, and offline records in one place.',
+                      ? 'Activate your secure Field Personnel account to get started.'
+                      : 'Keep your attendance, site activity, and offline records in one place.',
                   style: const TextStyle(
                     color: Color(0xffdbe9ff),
                     height: 1.45,
@@ -310,9 +313,20 @@ class _AuthViewState extends State<AuthView> {
                               : (_activating ? 'ACTIVATE ACCOUNT' : 'SIGN IN'),
                         ),
                       ),
+                      if (!_activating) ...[
+                        const SizedBox(height: 10),
+                        OutlinedButton.icon(
+                          key: const Key('request_device_replacement'),
+                          onPressed: widget.busy
+                              ? null
+                              : widget.onRequestDeviceReplacement,
+                          icon: const Icon(Icons.phonelink_lock_outlined),
+                          label: const Text('REQUEST THIS PHONE'),
+                        ),
+                      ],
                       const SizedBox(height: 12),
                       const Text(
-                        'Your face template and offline attendance records stay encrypted on this device.',
+                        'One authorized phone is allowed per account. Your face template and offline records stay encrypted on that phone.',
                         textAlign: TextAlign.center,
                         style: TextStyle(fontSize: 12, height: 1.4),
                       ),
@@ -400,6 +414,7 @@ class DriverShellView extends StatelessWidget {
     required this.driver,
     required this.assignment,
     required this.registered,
+    this.faceReregistrationStatus = 'none',
     required this.pendingAttempts,
     required this.busy,
     required this.cameraReady,
@@ -408,12 +423,15 @@ class DriverShellView extends StatelessWidget {
     required this.onDestinationSelected,
     required this.onCheckIn,
     required this.onRegister,
+    this.onRequestFaceReregistration,
+    this.onReregister,
     required this.onSynchronize,
     required this.onRefresh,
     required this.offline,
     required this.lastSyncedAt,
     required this.debugMode,
     required this.onDebugModeChanged,
+    required this.onOpenBiometricTesting,
     required this.onOpenDirections,
     required this.onLogout,
   });
@@ -421,6 +439,7 @@ class DriverShellView extends StatelessWidget {
   final DriverIdentity driver;
   final DriverAssignment? assignment;
   final bool registered;
+  final String faceReregistrationStatus;
   final List<AttendanceAttempt> pendingAttempts;
   final bool busy;
   final bool cameraReady;
@@ -429,12 +448,15 @@ class DriverShellView extends StatelessWidget {
   final ValueChanged<int> onDestinationSelected;
   final VoidCallback onCheckIn;
   final VoidCallback onRegister;
+  final VoidCallback? onRequestFaceReregistration;
+  final VoidCallback? onReregister;
   final VoidCallback onSynchronize;
   final Future<void> Function() onRefresh;
   final bool offline;
   final DateTime? lastSyncedAt;
   final bool debugMode;
   final ValueChanged<bool> onDebugModeChanged;
+  final VoidCallback onOpenBiometricTesting;
   final VoidCallback onOpenDirections;
   final VoidCallback onLogout;
 
@@ -468,17 +490,21 @@ class DriverShellView extends StatelessWidget {
         DriverProfileView(
           driver: driver,
           registered: registered,
+          faceReregistrationStatus: faceReregistrationStatus,
           assignmentReady: assignment?.isActive == true,
           queueCount: pendingAttempts.length,
           busy: busy,
           cameraReady: cameraReady,
           onRegister: onRegister,
+          onRequestFaceReregistration: onRequestFaceReregistration,
+          onReregister: onReregister,
           onSynchronize: onSynchronize,
           onRefresh: onRefresh,
           offline: offline,
           lastSyncedAt: lastSyncedAt,
           debugMode: debugMode,
           onDebugModeChanged: onDebugModeChanged,
+          onOpenBiometricTesting: onOpenBiometricTesting,
           onLogout: onLogout,
         ),
       ],
@@ -559,9 +585,7 @@ class DriverHomeView extends StatelessWidget {
             sliver: SliverList.list(
               children: [
                 SectionLabel(
-                  title: hasActiveAssignment
-                      ? 'Current delivery'
-                      : 'Latest delivery',
+                  title: 'Latest Site Assignment',
                   trailing: assignment == null
                       ? null
                       : StatusBadge(status: assignment!.status),
@@ -598,7 +622,7 @@ class DriverHomeView extends StatelessWidget {
                     Expanded(
                       child: ReadinessCard(
                         icon: Icons.location_on_outlined,
-                        label: 'Location',
+                        label: 'Site Location',
                         value: hasActiveAssignment ? 'Saved' : 'Waiting',
                         ready: hasActiveAssignment,
                       ),
@@ -675,7 +699,7 @@ class DriverHeader extends StatelessWidget {
             ),
             const SizedBox(height: 28),
             const Text(
-              'DRIVER WORKSPACE',
+              'FIELD PERSONNEL WORKSPACE',
               style: TextStyle(
                 color: Color(0xff9fb3cf),
                 fontSize: 11,
@@ -694,8 +718,13 @@ class DriverHeader extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              driver.employeeId,
+              'Field Personnel ID: ${driver.employeeId}',
               style: const TextStyle(color: Color(0xffc8d6e8)),
+            ),
+            const SizedBox(height: 7),
+            const Text(
+              'Keep your attendance, site activity, and offline records in one place.',
+              style: TextStyle(color: Color(0xffc8d6e8), height: 1.35),
             ),
           ],
         ),
@@ -741,15 +770,17 @@ class SectionLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      Text(
-        title,
-        style: Theme.of(
-          context,
-        ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+      Expanded(
+        child: Text(
+          title,
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+        ),
       ),
-      const Spacer(),
-      ?trailing,
+      if (trailing != null) ...[const SizedBox(width: 12), trailing!],
     ],
   );
 }
@@ -779,14 +810,14 @@ class AssignmentCard extends StatelessWidget {
               ),
               const SizedBox(height: 14),
               Text(
-                'No active delivery',
+                'No Site Assignment yet',
                 style: Theme.of(
                   context,
                 ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
               ),
               const SizedBox(height: 5),
               const Text(
-                'Your next destination will appear here when your Fleet Manager assigns it.',
+                'Your latest Site Assignment will appear here when your Fleet Manager assigns it.',
                 textAlign: TextAlign.center,
               ),
             ],
@@ -800,6 +831,16 @@ class AssignmentCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (item.routeName?.trim().isNotEmpty == true) ...[
+              Text(
+                item.routeName!,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 10),
+            ],
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -816,6 +857,30 @@ class AssignmentCard extends StatelessWidget {
                           letterSpacing: -.3,
                         ),
                       ),
+                      const SizedBox(height: 4),
+                      Text(
+                        item.isActive
+                            ? 'Site ${item.submittedStopCount + 1} of ${item.totalStopCount} • Current'
+                            : item.isPendingSynchronization
+                            ? '${item.submittedStopCount} of ${item.totalStopCount} sites submitted'
+                            : '${item.completedStopCount} of ${item.totalStopCount} sites completed',
+                        style: TextStyle(
+                          color: driverFleetBlue,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      if (item.isActive && item.totalStopCount > 1) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          '${item.completedStopCount} of ${item.totalStopCount} sites completed',
+                          style: TextStyle(
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onSurfaceVariant,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
                       if (item.address?.trim().isNotEmpty == true) ...[
                         const SizedBox(height: 4),
                         Text(
@@ -842,6 +907,20 @@ class AssignmentCard extends StatelessWidget {
             const SizedBox(height: 18),
             const Divider(height: 1),
             const SizedBox(height: 16),
+            Text(
+              'Site Assignment progress',
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 10),
+            ...item.routeStops.map(
+              (stop) => RouteStopProgress(
+                stop: stop,
+                isLast: stop.order == item.routeStops.length,
+              ),
+            ),
+            const SizedBox(height: 16),
             Row(
               children: [
                 Expanded(
@@ -863,6 +942,107 @@ class AssignmentCard extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class RouteStopProgress extends StatelessWidget {
+  const RouteStopProgress({
+    super.key,
+    required this.stop,
+    required this.isLast,
+  });
+
+  final DriverRouteStop stop;
+  final bool isLast;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = stop.isCompleted
+        ? driverFleetSuccess
+        : stop.state == 'pending_sync'
+        ? driverFleetWarning
+        : stop.isCurrent
+        ? driverFleetBlue
+        : Theme.of(context).colorScheme.outline;
+    final label = stop.isCompleted
+        ? 'Completed'
+        : stop.state == 'pending_sync'
+        ? 'Submitted'
+        : stop.isCurrent
+        ? 'Current'
+        : stop.state == 'cancelled'
+        ? 'Cancelled'
+        : 'Upcoming';
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            width: 30,
+            child: Column(
+              children: [
+                Container(
+                  width: 26,
+                  height: 26,
+                  decoration: BoxDecoration(
+                    color: stop.isSubmitted || stop.isCurrent
+                        ? color
+                        : Colors.transparent,
+                    border: Border.all(color: color, width: 2),
+                    shape: BoxShape.circle,
+                  ),
+                  alignment: Alignment.center,
+                  child: stop.isSubmitted
+                      ? const Icon(Icons.check, color: Colors.white, size: 16)
+                      : Text(
+                          '${stop.order}',
+                          style: TextStyle(
+                            color: stop.isCurrent ? Colors.white : color,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                ),
+                if (!isLast)
+                  Expanded(
+                    child: Container(
+                      width: 2,
+                      color: color.withValues(alpha: .3),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    stop.locationName,
+                    style: TextStyle(
+                      fontWeight: stop.isCurrent
+                          ? FontWeight.w900
+                          : FontWeight.w700,
+                    ),
+                  ),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -935,7 +1115,7 @@ class CheckInCard extends StatelessWidget {
     if (!registered) {
       return 'Set up face verification before your first check-in.';
     }
-    if (!hasAssignment) return 'Waiting for an active delivery assignment.';
+    if (!hasAssignment) return 'Waiting for an active Site Assignment.';
     return 'Face verification and GPS are checked on your phone.';
   }
 
@@ -964,15 +1144,18 @@ class CheckInCard extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Icon(Icons.verified_user_outlined, color: Colors.white),
             SizedBox(width: 9),
-            Text(
-              'Secure attendance',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.w800,
+            Expanded(
+              child: Text(
+                'Secure attendance',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                ),
               ),
             ),
           ],
@@ -1237,34 +1420,67 @@ class DriverProfileView extends StatelessWidget {
     super.key,
     required this.driver,
     required this.registered,
+    this.faceReregistrationStatus = 'none',
     required this.assignmentReady,
     required this.queueCount,
     required this.busy,
     required this.cameraReady,
     required this.onRegister,
+    this.onRequestFaceReregistration,
+    this.onReregister,
     required this.onSynchronize,
     required this.onRefresh,
     required this.offline,
     required this.lastSyncedAt,
     required this.debugMode,
     required this.onDebugModeChanged,
+    required this.onOpenBiometricTesting,
     required this.onLogout,
   });
 
   final DriverIdentity driver;
   final bool registered;
+  final String faceReregistrationStatus;
   final bool assignmentReady;
   final int queueCount;
   final bool busy;
   final bool cameraReady;
   final VoidCallback onRegister;
+  final VoidCallback? onRequestFaceReregistration;
+  final VoidCallback? onReregister;
   final VoidCallback onSynchronize;
   final Future<void> Function() onRefresh;
   final bool offline;
   final DateTime? lastSyncedAt;
   final bool debugMode;
   final ValueChanged<bool> onDebugModeChanged;
+  final VoidCallback onOpenBiometricTesting;
   final VoidCallback onLogout;
+
+  Future<void> _confirmFaceReregistration(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Re-register face?'),
+        content: const Text(
+          'Your current face verification stays active unless the new face setup finishes successfully.',
+        ),
+        actions: [
+          TextButton(
+            key: const Key('cancel_face_reregistration'),
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('confirm_face_reregistration'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) onReregister?.call();
+  }
 
   @override
   Widget build(BuildContext context) => RefreshIndicator(
@@ -1313,6 +1529,21 @@ class DriverProfileView extends StatelessWidget {
                   ),
                 ),
               ),
+              if (kDebugMode && debugMode && registered) ...[
+                const SizedBox(height: 10),
+                Card(
+                  child: ListTile(
+                    key: const Key('open_biometric_testing'),
+                    onTap: busy ? null : onOpenBiometricTesting,
+                    leading: const Icon(Icons.science_outlined),
+                    title: const Text('Biometric Testing Mode'),
+                    subtitle: const Text(
+                      'Pseudonymous research trials and CSV export',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                  ),
+                ),
+              ],
               const SizedBox(height: 20),
               const SectionLabel(title: 'Device readiness'),
               const SizedBox(height: 10),
@@ -1330,7 +1561,7 @@ class DriverProfileView extends StatelessWidget {
                     const Divider(height: 1, indent: 62),
                     ProfileStatusRow(
                       icon: Icons.location_on_outlined,
-                      title: 'Delivery location',
+                      title: 'Site Location',
                       value: assignmentReady
                           ? 'Saved for offline use'
                           : 'No active assignment',
@@ -1359,6 +1590,31 @@ class DriverProfileView extends StatelessWidget {
                   icon: const Icon(Icons.face_retouching_natural),
                   label: const Text('Set up face verification'),
                 ),
+              ] else if (registered && cameraReady) ...[
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  key: const Key('profile_reregister_face'),
+                  onPressed: busy || faceReregistrationStatus == 'pending'
+                      ? null
+                      : faceReregistrationStatus == 'approved'
+                      ? () => _confirmFaceReregistration(context)
+                      : onRequestFaceReregistration,
+                  icon: const Icon(Icons.face_retouching_natural),
+                  label: Text(
+                    faceReregistrationStatus == 'pending'
+                        ? 'Request pending'
+                        : faceReregistrationStatus == 'approved'
+                        ? 'Re-registration approved'
+                        : faceReregistrationStatus == 'rejected'
+                        ? 'Request rejected — request again'
+                        : 'Request re-registration',
+                  ),
+                ),
+                if (faceReregistrationStatus == 'pending')
+                  const Padding(
+                    padding: EdgeInsets.only(top: 8),
+                    child: Text('Waiting for Fleet Manager approval'),
+                  ),
               ],
               const SizedBox(height: 20),
               const SectionLabel(title: 'Account'),
@@ -1378,27 +1634,31 @@ class DriverProfileView extends StatelessWidget {
                       onTap: busy ? null : onSynchronize,
                       leading: const Icon(Icons.sync),
                       title: const Text('Synchronize now'),
-                      subtitle: const Text('Refresh assignment and attendance'),
+                      subtitle: const Text(
+                        'Refresh Site Assignment and attendance',
+                      ),
                       trailing: const Icon(Icons.chevron_right),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(height: 16),
-              const SectionLabel(title: 'Settings'),
-              const SizedBox(height: 10),
-              Card(
-                child: SwitchListTile(
-                  key: const Key('debug_mode'),
-                  value: debugMode,
-                  onChanged: busy ? null : onDebugModeChanged,
-                  secondary: const Icon(Icons.bug_report_outlined),
-                  title: const Text('Debug Mode'),
-                  subtitle: const Text(
-                    'Show technical camera details for troubleshooting',
+              if (kDebugMode) ...[
+                const SizedBox(height: 16),
+                const SectionLabel(title: 'Settings'),
+                const SizedBox(height: 10),
+                Card(
+                  child: SwitchListTile(
+                    key: const Key('debug_mode'),
+                    value: debugMode,
+                    onChanged: busy ? null : onDebugModeChanged,
+                    secondary: const Icon(Icons.bug_report_outlined),
+                    title: const Text('Debug Mode'),
+                    subtitle: const Text(
+                      'Show technical camera details for troubleshooting',
+                    ),
                   ),
                 ),
-              ),
+              ],
               const SizedBox(height: 16),
               OutlinedButton.icon(
                 key: const Key('logout'),
@@ -1568,8 +1828,8 @@ class StatusBadge extends StatelessWidget {
     final (label, color) = switch (status) {
       'assigned' => ('Assigned', driverFleetWarning),
       'in_progress' => ('In progress', const Color(0xff8b61e8)),
-      'completed' => ('Delivered', driverFleetSuccess),
-      'pending_sync' => ('Pending', driverFleetWarning),
+      'completed' => ('Completed', driverFleetSuccess),
+      'pending_sync' => ('Submitted', driverFleetWarning),
       'active' => ('Active', driverFleetSuccess),
       _ => (status.replaceAll('_', ' '), Theme.of(context).colorScheme.outline),
     };

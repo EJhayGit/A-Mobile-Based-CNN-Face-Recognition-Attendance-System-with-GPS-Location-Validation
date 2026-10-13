@@ -36,8 +36,10 @@ def attendance_payload(
     attempt_id: str,
     driver_id: str = "local-development-driver",
     site_id: str = "depot-1",
+    assignment_id: str | None = None,
+    route_stop_id: str | None = None,
 ) -> dict:
-    return {
+    payload = {
         "client_attempt_id": attempt_id,
         "driver_id": driver_id,
         "site_id": site_id,
@@ -50,6 +52,11 @@ def attendance_payload(
         "face_verified": True,
         "gps_verified": True,
     }
+    if assignment_id:
+        payload["assignment_id"] = assignment_id
+    if route_stop_id:
+        payload["route_stop_id"] = route_stop_id
+    return payload
 
 
 def test_attendance_auth_ownership_validation_and_idempotency(
@@ -200,6 +207,184 @@ def test_attendance_malformed_timestamp_and_disabled_driver_rejected(
         ).status_code
         == 401
     )
+
+
+def test_multi_stop_attendance_advances_current_stop_once_and_finishes_last(
+    client: TestClient, factory
+):
+    created = create_driver(client, "TEST-DRV-SEQUENTIAL-STOPS")
+    tokens = activate_driver(client, created)
+    locations = []
+    for name in ("Sequential One", "Sequential Two"):
+        response = client.post(
+            "/api/manager/locations",
+            headers=csrf(client),
+            json={
+                "name": name,
+                "latitude": 14.5995,
+                "longitude": 120.9842,
+                "radius_meters": 150,
+            },
+        )
+        assert response.status_code == 201
+        locations.append(response.json()["location"])
+    route_response = client.post(
+        "/api/manager/deliveries",
+        headers=csrf(client),
+        json={
+            "driver_id": created["driver"]["id"],
+            "route_name": "Sequential Route",
+            "stops": [
+                {"delivery_location_id": location["id"]} for location in locations
+            ],
+        },
+    )
+    assert route_response.status_code == 201
+    route = route_response.json()["assignment"]
+    route_id = route["id"]
+    stop_ids = [stop["id"] for stop in route["stops"]]
+    bearer = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    first_payload = attendance_payload(
+        "multi-first",
+        site_id=locations[0]["id"],
+        assignment_id=route_id,
+        route_stop_id=stop_ids[0],
+    )
+    wrong_assignment = {
+        **first_payload,
+        "client_attempt_id": "wrong-assignment",
+        "assignment_id": "wrong-assignment-id",
+    }
+    assert (
+        client.post(
+            "/attendance/sync",
+            headers={**bearer, "Idempotency-Key": "wrong-assignment"},
+            json=wrong_assignment,
+        ).status_code
+        == 400
+    )
+    wrong_stop = {
+        **first_payload,
+        "client_attempt_id": "wrong-stop",
+        "route_stop_id": stop_ids[1],
+    }
+    assert (
+        client.post(
+            "/attendance/sync",
+            headers={**bearer, "Idempotency-Key": "wrong-stop"},
+            json=wrong_stop,
+        ).status_code
+        == 400
+    )
+    first = client.post(
+        "/attendance/sync",
+        headers={**bearer, "Idempotency-Key": "multi-first"},
+        json=first_payload,
+    )
+    assert first.status_code == 201
+    duplicate = client.post(
+        "/attendance/sync",
+        headers={**bearer, "Idempotency-Key": "multi-first"},
+        json=first_payload,
+    )
+    assert duplicate.status_code == 200
+    assert duplicate.json()["created"] is False
+    after_first = client.get(f"/api/manager/deliveries/{route_id}").json()["assignment"]
+    assert after_first["status"] == "in_progress"
+    assert after_first["completed_stop_count"] == 1
+    assert after_first["location"]["id"] == locations[1]["id"]
+    assert [stop["state"] for stop in after_first["stops"]] == [
+        "completed",
+        "current",
+    ]
+
+    stale = attendance_payload("multi-stale", site_id=locations[0]["id"])
+    assert (
+        client.post(
+            "/attendance/sync",
+            headers={**bearer, "Idempotency-Key": "multi-stale"},
+            json=stale,
+        ).status_code
+        == 400
+    )
+    second_payload = attendance_payload(
+        "multi-second",
+        site_id=locations[1]["id"],
+        assignment_id=route_id,
+        route_stop_id=stop_ids[1],
+    )
+    final = client.post(
+        "/attendance/sync",
+        headers={**bearer, "Idempotency-Key": "multi-second"},
+        json=second_payload,
+    )
+    assert final.status_code == 201
+    completed = client.get(f"/api/manager/deliveries/{route_id}").json()["assignment"]
+    assert completed["status"] == "completed"
+    assert completed["completed_stop_count"] == 2
+    assert completed["current_stop_id"] is None
+    assert [stop["state"] for stop in completed["stops"]] == [
+        "completed",
+        "completed",
+    ]
+    driver_me = client.get("/api/driver/me", headers=bearer).json()["driver"]
+    assert driver_me["current_assignment"] is None
+    assert driver_me["recent_delivery"]["id"] == route_id
+    with factory() as db:
+        assignment = db.get(DeliveryAssignment, route_id)
+        assert assignment is not None and assignment.completed_at is not None
+        assert db.scalar(select(func.count(AttendanceRecord.id))) == 2
+
+
+def test_cancelling_partial_route_preserves_completed_stop(client: TestClient):
+    created = create_driver(client, "TEST-DRV-CANCEL-PARTIAL")
+    tokens = activate_driver(client, created)
+    locations = []
+    for name in ("Cancel First", "Cancel Second"):
+        response = client.post(
+            "/api/manager/locations",
+            headers=csrf(client),
+            json={
+                "name": name,
+                "latitude": 14.5995,
+                "longitude": 120.9842,
+                "radius_meters": 100,
+            },
+        )
+        locations.append(response.json()["location"])
+    route = client.post(
+        "/api/manager/deliveries",
+        headers=csrf(client),
+        json={
+            "driver_id": created["driver"]["id"],
+            "stops": [
+                {"delivery_location_id": location["id"]} for location in locations
+            ],
+        },
+    ).json()["assignment"]
+    payload = attendance_payload("cancel-partial", site_id=locations[0]["id"])
+    accepted = client.post(
+        "/attendance/sync",
+        headers={
+            "Authorization": f"Bearer {tokens['access_token']}",
+            "Idempotency-Key": "cancel-partial",
+        },
+        json=payload,
+    )
+    assert accepted.status_code == 201
+    cancelled = client.patch(
+        f"/api/manager/deliveries/{route['id']}",
+        headers=csrf(client),
+        json={"status": "cancelled"},
+    ).json()["assignment"]
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["completed_stop_count"] == 1
+    assert [stop["state"] for stop in cancelled["stops"]] == [
+        "completed",
+        "cancelled",
+    ]
+    assert cancelled["stops"][0]["completed_at"] is not None
 
 
 def test_manager_cannot_upload_attendance(client: TestClient):

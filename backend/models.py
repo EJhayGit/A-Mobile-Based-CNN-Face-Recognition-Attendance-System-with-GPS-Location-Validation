@@ -97,9 +97,75 @@ class DriverProfile(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
+    authorized_device_public_key: Mapped[str | None] = mapped_column(Text)
+    authorized_device_fingerprint: Mapped[str | None] = mapped_column(
+        String(64), unique=True
+    )
+    authorized_device_label: Mapped[str | None] = mapped_column(String(120))
+    device_authorized_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    device_authorized_by_manager_id: Mapped[str | None] = mapped_column(
+        ForeignKey("accounts.id", ondelete="SET NULL")
+    )
+    device_face_enrolled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
 
     account: Mapped[Account] = relationship(
         back_populates="driver_profile", foreign_keys=[account_id]
+    )
+
+
+class FaceReregistrationRequest(Base):
+    __tablename__ = "face_reregistration_requests"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('pending','approved','rejected','consumed')",
+            name="face_reregistration_requests_status_check",
+        ),
+        Index("face_reregistration_requests_status_idx", "status", "requested_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    driver_account_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decided_by_manager_id: Mapped[str | None] = mapped_column(
+        ForeignKey("accounts.id", ondelete="SET NULL")
+    )
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DeviceReplacementRequest(Base):
+    __tablename__ = "device_replacement_requests"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('pending','approved','rejected')",
+            name="device_replacement_requests_status_check",
+        ),
+        Index("device_replacement_requests_status_idx", "status", "requested_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    driver_account_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    candidate_public_key: Mapped[str] = mapped_column(Text, nullable=False)
+    candidate_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    candidate_device_label: Mapped[str | None] = mapped_column(String(120))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decided_by_manager_id: Mapped[str | None] = mapped_column(
+        ForeignKey("accounts.id", ondelete="SET NULL")
     )
 
 
@@ -157,6 +223,7 @@ class AuthSession(Base):
     )
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     device_label: Mapped[str | None] = mapped_column(String(120))
+    device_fingerprint: Mapped[str | None] = mapped_column(String(64))
 
 
 class DeliveryLocation(Base):
@@ -200,6 +267,9 @@ class DeliveryLocation(Base):
     assignments: Mapped[list[DeliveryAssignment]] = relationship(
         back_populates="location"
     )
+    route_stops: Mapped[list[DeliveryRouteStop]] = relationship(
+        back_populates="location"
+    )
 
 
 class DeliveryAssignment(Base):
@@ -234,6 +304,7 @@ class DeliveryAssignment(Base):
         DateTime(timezone=True), default=utcnow
     )
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    route_name: Mapped[str | None] = mapped_column(String(160))
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="assigned")
     notes: Mapped[str | None] = mapped_column(Text)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -248,6 +319,49 @@ class DeliveryAssignment(Base):
         back_populates="delivery_assignments", foreign_keys=[driver_account_id]
     )
     location: Mapped[DeliveryLocation] = relationship(back_populates="assignments")
+    stops: Mapped[list[DeliveryRouteStop]] = relationship(
+        back_populates="assignment", order_by="DeliveryRouteStop.stop_order"
+    )
+
+
+class DeliveryRouteStop(Base):
+    __tablename__ = "delivery_route_stops"
+    __table_args__ = (
+        CheckConstraint("stop_order > 0", name="delivery_route_stops_order_check"),
+        Index(
+            "delivery_route_stops_active_order_key",
+            "delivery_assignment_id",
+            "stop_order",
+            unique=True,
+            postgresql_where=sql_text("removed_at is null"),
+            sqlite_where=sql_text("removed_at is null"),
+        ),
+        Index(
+            "delivery_route_stops_location_idx",
+            "delivery_location_id",
+            "delivery_assignment_id",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    delivery_assignment_id: Mapped[str] = mapped_column(
+        ForeignKey("delivery_assignments.id", ondelete="RESTRICT"), nullable=False
+    )
+    delivery_location_id: Mapped[str] = mapped_column(
+        ForeignKey("delivery_locations.id", ondelete="RESTRICT"), nullable=False
+    )
+    stop_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    assignment: Mapped[DeliveryAssignment] = relationship(back_populates="stops")
+    location: Mapped[DeliveryLocation] = relationship(back_populates="route_stops")
 
 
 class AttendanceRecord(Base):

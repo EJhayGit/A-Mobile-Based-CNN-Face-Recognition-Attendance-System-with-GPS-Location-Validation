@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections.abc import Callable
 from dataclasses import asdict
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from .curriculum import (
+    APPROVAL_TOKEN,
     CURRICULUM_STAGES,
     curriculum_paths,
     inspect_preflight,

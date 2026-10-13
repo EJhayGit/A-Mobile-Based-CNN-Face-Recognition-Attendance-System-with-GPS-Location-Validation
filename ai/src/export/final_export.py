@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import argparse
-import json
 from dataclasses import asdict, dataclass
+import json
 from pathlib import Path
 from statistics import median
 from time import perf_counter
@@ -122,10 +122,7 @@ def export_and_verify_final_model(
     default_opsets = [item.version for item in graph.opset_import if not item.domain]
     if default_opsets != [18]:
         raise RuntimeError("final ONNX graph does not use default-domain opset 18")
-    if (
-        graph.graph.input[0].name != "input"
-        or graph.graph.output[0].name != "embedding"
-    ):
+    if graph.graph.input[0].name != "input" or graph.graph.output[0].name != "embedding":
         raise RuntimeError("final ONNX tensor names do not match")
     input_shape = graph.graph.input[0].type.tensor_type.shape.dim
     output_shape = graph.graph.output[0].type.tensor_type.shape.dim
@@ -162,7 +159,8 @@ def export_and_verify_final_model(
     onnx_scores, _ = pair_scores(actual, pairs)
     decision_mismatches = int(
         np.count_nonzero(
-            (pytorch_scores >= locked_threshold) != (onnx_scores >= locked_threshold)
+            (pytorch_scores >= locked_threshold)
+            != (onnx_scores >= locked_threshold)
         )
     )
     if decision_mismatches:
@@ -179,9 +177,12 @@ def export_and_verify_final_model(
         session.run(["embedding"], {"input": batch_one})
         durations_ms.append((perf_counter() - started) * 1000.0)
 
+    checkpoint_epoch = payload.get("completed_epoch", payload.get("epoch"))
+    if checkpoint_epoch is None:
+        raise ValueError("MerLens V2 checkpoint lacks a completed epoch")
     result = FinalExportResult(
         checkpoint_sha256=checkpoint_hash,
-        checkpoint_epoch=int(payload.get("epoch", payload["completed_epoch"])),
+        checkpoint_epoch=int(checkpoint_epoch),
         onnx_sha256=sha256_file(output_path),
         onnx_size_bytes=output_path.stat().st_size,
         onnx_opset=default_opsets[0],

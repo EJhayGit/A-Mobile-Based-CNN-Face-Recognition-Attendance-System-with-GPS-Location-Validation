@@ -15,7 +15,52 @@ from backend.models import (
     utcnow,
 )
 from backend.services import AppError, bootstrap_manager
-from backend.tests.conftest import activate_driver, create_driver, csrf, manager_login
+from backend.tests.conftest import (
+    activate_driver,
+    create_driver,
+    csrf,
+    device_proof,
+    manager_login,
+)
+
+
+def activation_body(
+    client: TestClient,
+    employee_id: str,
+    activation_code: str,
+    password: str,
+) -> dict:
+    proof, _ = device_proof(client, employee_id, "activate")
+    return {
+        "employee_id": employee_id,
+        "activation_code": activation_code,
+        "password": password,
+        **proof,
+    }
+
+
+def login_body(client: TestClient, tokens: dict, password: str) -> dict:
+    proof, _ = device_proof(
+        client,
+        tokens["_login_id"],
+        "login",
+        tokens["_device_private_key"],
+    )
+    return {"login_id": tokens["_login_id"], "password": password, **proof}
+
+
+def refresh_body(client: TestClient, tokens: dict, refresh_token: str) -> dict:
+    proof, _ = device_proof(
+        client,
+        tokens["_login_id"],
+        "refresh",
+        tokens["_device_private_key"],
+    )
+    return {
+        "refresh_token": refresh_token,
+        "login_id": tokens["_login_id"],
+        **proof,
+    }
 
 
 def test_bootstrap_is_hashed_audited_and_duplicate_safe(
@@ -101,6 +146,18 @@ def test_driver_soft_delete_preserves_identity_code_and_audit_history(
     deleted = client.delete(f"/api/manager/drivers/{driver_id}", headers=csrf(client))
     assert deleted.status_code == 200
     assert deleted.json() == {"deleted": True}
+    assert (
+        client.post(
+            "/api/driver/activate",
+            json=activation_body(
+                client,
+                "TEST-DRV-DELETE",
+                created["activation_code"],
+                "Driver-Test-Password-1!",
+            ),
+        ).status_code
+        == 400
+    )
     assert client.get(f"/api/manager/drivers/{driver_id}").status_code == 404
     assert client.get("/api/manager/drivers").json()["count"] == 0
     with factory() as db:
@@ -119,17 +176,18 @@ def test_driver_soft_delete_preserves_identity_code_and_audit_history(
             == 1
         )
         code = db.scalar(
-            select(ActivationCode).where(
-                ActivationCode.driver_account_id == driver_id
-            )
+            select(ActivationCode).where(ActivationCode.driver_account_id == driver_id)
         )
         assert code.invalidated_at is not None
-        assert db.scalar(
-            select(func.count(AccountAuditLog.id)).where(
-                AccountAuditLog.target_account_id == driver_id,
-                AccountAuditLog.event_type == "driver_deleted",
+        assert (
+            db.scalar(
+                select(func.count(AccountAuditLog.id)).where(
+                    AccountAuditLog.target_account_id == driver_id,
+                    AccountAuditLog.event_type == "driver_deleted",
+                )
             )
-        ) == 1
+            == 1
+        )
 
 
 def test_activation_reuse_regeneration_expiry_disable_and_attempt_limit(
@@ -142,29 +200,32 @@ def test_activation_reuse_regeneration_expiry_disable_and_attempt_limit(
     ).json()
     old = client.post(
         "/api/driver/activate",
-        json={
-            "employee_id": "TEST-DRV-001",
-            "activation_code": created["activation_code"],
-            "password": "Driver-Test-Password-1!",
-        },
+        json=activation_body(
+            client,
+            "TEST-DRV-001",
+            created["activation_code"],
+            "Driver-Test-Password-1!",
+        ),
     )
     assert old.status_code == 400
     activated = client.post(
         "/api/driver/activate",
-        json={
-            "employee_id": "TEST-DRV-001",
-            "activation_code": regenerated["activation_code"],
-            "password": "Driver-Test-Password-1!",
-        },
+        json=activation_body(
+            client,
+            "TEST-DRV-001",
+            regenerated["activation_code"],
+            "Driver-Test-Password-1!",
+        ),
     )
     assert activated.status_code == 200
     reused = client.post(
         "/api/driver/activate",
-        json={
-            "employee_id": "TEST-DRV-001",
-            "activation_code": regenerated["activation_code"],
-            "password": "Driver-Test-Password-1!",
-        },
+        json=activation_body(
+            client,
+            "TEST-DRV-001",
+            regenerated["activation_code"],
+            "Driver-Test-Password-1!",
+        ),
     )
     assert reused.status_code == 400
 
@@ -180,11 +241,12 @@ def test_activation_reuse_regeneration_expiry_disable_and_attempt_limit(
         db.commit()
     expired = client.post(
         "/api/driver/activate",
-        json={
-            "employee_id": "TEST-DRV-002",
-            "activation_code": second["activation_code"],
-            "password": "Driver-Test-Password-2!",
-        },
+        json=activation_body(
+            client,
+            "TEST-DRV-002",
+            second["activation_code"],
+            "Driver-Test-Password-2!",
+        ),
     )
     assert expired.status_code == 400
     replacement = client.post(
@@ -193,11 +255,12 @@ def test_activation_reuse_regeneration_expiry_disable_and_attempt_limit(
     client.patch(f"/api/manager/drivers/{second_id}/disable", headers=csrf(client))
     disabled = client.post(
         "/api/driver/activate",
-        json={
-            "employee_id": "TEST-DRV-002",
-            "activation_code": replacement["activation_code"],
-            "password": "Driver-Test-Password-2!",
-        },
+        json=activation_body(
+            client,
+            "TEST-DRV-002",
+            replacement["activation_code"],
+            "Driver-Test-Password-2!",
+        ),
     )
     assert disabled.status_code == 400
     client.patch(f"/api/manager/drivers/{second_id}/reactivate", headers=csrf(client))
@@ -210,11 +273,12 @@ def test_activation_reuse_regeneration_expiry_disable_and_attempt_limit(
         assert current.invalidated_at is not None
     invalidated = client.post(
         "/api/driver/activate",
-        json={
-            "employee_id": "TEST-DRV-002",
-            "activation_code": replacement["activation_code"],
-            "password": "Driver-Test-Password-2!",
-        },
+        json=activation_body(
+            client,
+            "TEST-DRV-002",
+            replacement["activation_code"],
+            "Driver-Test-Password-2!",
+        ),
     )
     assert invalidated.status_code == 400
 
@@ -224,20 +288,22 @@ def test_failed_activation_attempt_limit(client: TestClient, factory):
     for _ in range(3):
         response = client.post(
             "/api/driver/activate",
-            json={
-                "employee_id": "TEST-DRV-001",
-                "activation_code": "WRONG999",
-                "password": "Driver-Test-Password-1!",
-            },
+            json=activation_body(
+                client,
+                "TEST-DRV-001",
+                "WRONG999",
+                "Driver-Test-Password-1!",
+            ),
         )
         assert response.status_code == 400
     valid_after_limit = client.post(
         "/api/driver/activate",
-        json={
-            "employee_id": "TEST-DRV-001",
-            "activation_code": created["activation_code"],
-            "password": "Driver-Test-Password-1!",
-        },
+        json=activation_body(
+            client,
+            "TEST-DRV-001",
+            created["activation_code"],
+            "Driver-Test-Password-1!",
+        ),
     )
     assert valid_after_limit.status_code == 400
     with factory() as db:
@@ -275,13 +341,13 @@ def test_driver_login_password_change_disable_reactivate_and_role_boundaries(
     assert (
         client.post(
             "/api/driver/auth/login",
-            json={"login_id": "TEST-DRV-001", "password": "Driver-Test-Password-1!"},
+            json=login_body(client, tokens, "Driver-Test-Password-1!"),
         ).status_code
         == 401
     )
     new_login = client.post(
         "/api/driver/auth/login",
-        json={"login_id": "TEST-DRV-001", "password": "Driver-Test-Password-NEW!"},
+        json=login_body(client, tokens, "Driver-Test-Password-NEW!"),
     )
     assert new_login.status_code == 200
     client.patch(
@@ -290,7 +356,7 @@ def test_driver_login_password_change_disable_reactivate_and_role_boundaries(
     assert (
         client.post(
             "/api/driver/auth/login",
-            json={"login_id": "TEST-DRV-001", "password": "Driver-Test-Password-NEW!"},
+            json=login_body(client, tokens, "Driver-Test-Password-NEW!"),
         ).status_code
         == 401
     )
@@ -301,7 +367,7 @@ def test_driver_login_password_change_disable_reactivate_and_role_boundaries(
     assert (
         client.post(
             "/api/driver/auth/login",
-            json={"login_id": "TEST-DRV-001", "password": "Driver-Test-Password-NEW!"},
+            json=login_body(client, tokens, "Driver-Test-Password-NEW!"),
         ).status_code
         == 200
     )
@@ -310,12 +376,14 @@ def test_driver_login_password_change_disable_reactivate_and_role_boundaries(
 def test_refresh_rotation_and_revoked_refresh_rejected(client: TestClient):
     tokens = activate_driver(client, create_driver(client))
     refreshed = client.post(
-        "/api/driver/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+        "/api/driver/auth/refresh",
+        json=refresh_body(client, tokens, tokens["refresh_token"]),
     )
     assert refreshed.status_code == 200
     assert (
         client.post(
-            "/api/driver/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+            "/api/driver/auth/refresh",
+            json=refresh_body(client, tokens, tokens["refresh_token"]),
         ).status_code
         == 401
     )

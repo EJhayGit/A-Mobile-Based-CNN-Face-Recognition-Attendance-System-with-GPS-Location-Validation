@@ -1,7 +1,8 @@
 import 'dart:math' as math;
 
-const lockedCosineThreshold = 0.2071264386177063;
+const lockedCosineThreshold = 0.35;
 const embeddingLength = 128;
+const attendanceVerificationComparisonCount = 3;
 
 List<double> normalizeEmbedding(List<double> input) {
   if (input.length != embeddingLength ||
@@ -39,6 +40,98 @@ double cosineSimilarity(List<double> first, List<double> second) {
     score += a[index] * b[index];
   }
   return score;
+}
+
+enum AttendanceFaceComparisonStatus { pending, accepted, rejected }
+
+class AttendanceFaceComparison {
+  const AttendanceFaceComparison({
+    required this.status,
+    required this.score,
+    this.aggregatedProbe,
+  });
+
+  final AttendanceFaceComparisonStatus status;
+  final double score;
+  final List<double>? aggregatedProbe;
+}
+
+class AttendanceFaceVerification {
+  String? _driverId;
+  List<double>? _enrollmentTemplate;
+  final List<List<double>> _probes = [];
+  final List<double> _scores = [];
+  bool _verified = false;
+
+  bool get verified => _verified;
+  int get comparisonCount => _scores.length;
+  double? get latestScore => _scores.isEmpty ? null : _scores.last;
+
+  void begin({
+    required String driverId,
+    required List<double> enrollmentTemplate,
+  }) {
+    clear();
+    _driverId = driverId;
+    _enrollmentTemplate = normalizeEmbedding(enrollmentTemplate);
+  }
+
+  AttendanceFaceComparison compare({
+    required String driverId,
+    required List<double> probe,
+  }) {
+    final template = _enrollmentTemplate;
+    if (template == null || _driverId != driverId) {
+      resetAttempt();
+      throw StateError(
+        'Attendance verification Field Personnel does not match.',
+      );
+    }
+    final normalizedProbe = normalizeEmbedding(probe);
+    final score = cosineSimilarity(template, normalizedProbe);
+    if (score < lockedCosineThreshold) {
+      resetAttempt();
+      return AttendanceFaceComparison(
+        status: AttendanceFaceComparisonStatus.rejected,
+        score: score,
+      );
+    }
+    _probes.add(normalizedProbe);
+    _scores.add(score);
+    if (_scores.length < attendanceVerificationComparisonCount) {
+      return AttendanceFaceComparison(
+        status: AttendanceFaceComparisonStatus.pending,
+        score: score,
+      );
+    }
+    final aggregate = enrollmentTemplate(_probes);
+    final aggregateScore = cosineSimilarity(template, aggregate);
+    if (aggregateScore < lockedCosineThreshold) {
+      resetAttempt();
+      return AttendanceFaceComparison(
+        status: AttendanceFaceComparisonStatus.rejected,
+        score: aggregateScore,
+      );
+    }
+    _verified = true;
+    return AttendanceFaceComparison(
+      status: AttendanceFaceComparisonStatus.accepted,
+      score: aggregateScore,
+      aggregatedProbe: aggregate,
+    );
+  }
+
+  void resetAttempt() {
+    _probes.clear();
+    _scores.clear();
+    _verified = false;
+  }
+
+  void clear() {
+    resetAttempt();
+    _driverId = null;
+    _enrollmentTemplate = null;
+  }
 }
 
 double haversineMeters(
@@ -93,12 +186,12 @@ class AuthorizedSite {
 AuthorizedSite? assignedSiteFromDriverResponse(Map<String, dynamic> payload) {
   final driver = payload['driver'];
   if (driver is! Map<String, dynamic>) {
-    throw const FormatException('Driver response is missing.');
+    throw const FormatException('Field Personnel response is missing.');
   }
   final assignment = driver['current_assignment'];
   if (assignment == null) return null;
   if (assignment is! Map<String, dynamic>) {
-    throw const FormatException('Assigned delivery is invalid.');
+    throw const FormatException('Assigned Site Assignment is invalid.');
   }
   final location = assignment['location'];
   if (location is! Map<String, dynamic>) {
@@ -186,6 +279,8 @@ class AttendanceAttempt {
     required this.clientAttemptId,
     required this.driverId,
     required this.siteId,
+    this.assignmentId,
+    this.routeStopId,
     required this.capturedAtUtc,
     required this.latitude,
     required this.longitude,
@@ -197,6 +292,8 @@ class AttendanceAttempt {
   final String clientAttemptId;
   final String driverId;
   final String siteId;
+  final String? assignmentId;
+  final String? routeStopId;
   final DateTime capturedAtUtc;
   final double latitude;
   final double longitude;
@@ -208,6 +305,8 @@ class AttendanceAttempt {
     'client_attempt_id': clientAttemptId,
     'driver_id': driverId,
     'site_id': siteId,
+    'assignment_id': ?assignmentId,
+    'route_stop_id': ?routeStopId,
     'captured_at_utc': capturedAtUtc.toUtc().toIso8601String(),
     'latitude': latitude,
     'longitude': longitude,
@@ -223,6 +322,8 @@ class AttendanceAttempt {
         clientAttemptId: json['client_attempt_id'] as String,
         driverId: json['driver_id'] as String,
         siteId: json['site_id'] as String,
+        assignmentId: json['assignment_id'] as String?,
+        routeStopId: json['route_stop_id'] as String?,
         capturedAtUtc: DateTime.parse(
           json['captured_at_utc'] as String,
         ).toUtc(),

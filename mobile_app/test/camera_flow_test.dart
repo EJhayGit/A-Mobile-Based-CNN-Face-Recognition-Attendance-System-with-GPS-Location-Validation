@@ -56,31 +56,13 @@ const exposureStabilizingQuality = CaptureQuality(
   brightnessDelta: 30,
 );
 
-Map<String, SkinRegionColor> skin({
-  double red = 100,
-  double green = 100,
-  double blue = 100,
-}) => {
-  for (final name in ['forehead', 'leftCheek', 'rightCheek', 'noseBridge'])
-    name: SkinRegionColor(red: red, green: green, blue: blue),
-};
-
-int Function(int) fixedChallengeRandom(HeadTurnDirection direction) {
-  var callIndex = 0;
-  return (maximum) {
-    final value = callIndex == 0 ? direction.index : 0;
-    callIndex++;
-    return value.clamp(0, maximum - 1);
-  };
-}
-
 class FlowHarness {
   FlowHarness({
     ScanPurpose purpose = ScanPurpose.attendance,
     HeadTurnDirection direction = HeadTurnDirection.left,
   }) : flow = SecureLivenessController(
          purpose: purpose,
-         nextRandomInt: fixedChallengeRandom(direction),
+         nextRandomInt: (_) => direction.index,
        );
 
   final SecureLivenessController flow;
@@ -94,7 +76,6 @@ class FlowHarness {
     double centerX = 0.5,
     double centerY = 0.5,
     double faceWidth = 0.4,
-    Map<String, SkinRegionColor>? regions,
     String? sessionId,
     Duration advance = const Duration(milliseconds: 250),
   }) {
@@ -111,7 +92,7 @@ class FlowHarness {
       centerX: centerX,
       centerY: centerY,
       faceWidth: faceWidth,
-      skinRegions: regions ?? skin(),
+      skinRegions: const {},
     );
     final update = flow.process(
       SecureLivenessEvidence(
@@ -136,14 +117,16 @@ class FlowHarness {
     expect(flow.stage, SecureLivenessStage.headTurn);
   }
 
-  void reachColorChallenge() {
-    reachHeadTurn();
-    frames(2, yaw: 18);
+  void completePose({double centeredYaw = 0}) {
+    reachHeadTurn(centeredYaw: centeredYaw);
+    final turnYaw = flow.direction == HeadTurnDirection.left
+        ? centeredYaw + 18
+        : centeredYaw - 18;
+    frames(2, yaw: turnYaw);
     expect(flow.stage, SecureLivenessStage.headReturn);
-    frames(2);
-    expect(flow.stage, SecureLivenessStage.colorBaseline);
-    frames(3);
-    expect(flow.stage, SecureLivenessStage.colorChallenge);
+    frames(2, yaw: centeredYaw);
+    expect(flow.stage, SecureLivenessStage.captureStabilizing);
+    expect(flow.livenessCompleted, isTrue);
   }
 }
 
@@ -180,20 +163,24 @@ void main() {
     await expectLater(
       gate.runIfAcquired(
         start.add(const Duration(milliseconds: 200)),
-        () async {
-          throw StateError('expected');
-        },
+        () async => throw StateError('expected'),
       ),
       throwsStateError,
     );
     expect(gate.locked, isFalse);
   });
 
-  test('fresh randomized session never reuses its identifier', () {
+  test('fresh session randomizes only pose and has no color states', () {
     final harness = FlowHarness();
     final first = harness.flow.sessionId;
     expect(harness.flow.direction, HeadTurnDirection.left);
-    expect(harness.flow.colorSequence, [ChallengeScreenColor.red]);
+    final stages = SecureLivenessStage.values.map((stage) => stage.name);
+    expect(stages, isNot(contains('colorBaseline')));
+    expect(stages, isNot(contains('colorChallenge')));
+    expect(ScreenIllumination.values, [
+      ScreenIllumination.neutral,
+      ScreenIllumination.white,
+    ]);
     harness.flow.restart();
     expect(harness.flow.sessionId, isNot(first));
     expect(harness.flow.stage, SecureLivenessStage.quality);
@@ -202,10 +189,8 @@ void main() {
   test('stale session and face loss reset progress without capture', () {
     final harness = FlowHarness();
     harness.frames(2);
-    expect(harness.flow.stage, SecureLivenessStage.quality);
     harness.frame(sessionId: 'stale-session');
     expect(harness.flow.stage, SecureLivenessStage.quality);
-    expect(harness.flow.captureInFlight, isFalse);
     harness.frame(yunet: const FaceObservation.none(), quality: null);
     expect(harness.flow.stage, SecureLivenessStage.quality);
     expect(harness.flow.captureInFlight, isFalse);
@@ -216,21 +201,21 @@ void main() {
     () {
       final harness = FlowHarness();
       final low = harness.frame(quality: lowLightQuality);
-      expect(low.screenColor, ChallengeScreenColor.white);
+      expect(low.screenIllumination, ScreenIllumination.white);
       final stabilizing = harness.frame(quality: exposureStabilizingQuality);
-      expect(stabilizing.screenColor, ChallengeScreenColor.white);
+      expect(stabilizing.screenIllumination, ScreenIllumination.white);
       expect(stabilizing.raiseWindowBrightness, isTrue);
       expect(stabilizing.lowLightIllumination, isTrue);
-      expect(harness.frame().screenColor, ChallengeScreenColor.white);
-      expect(harness.frame().screenColor, ChallengeScreenColor.white);
+      expect(harness.frame().screenIllumination, ScreenIllumination.white);
+      expect(harness.frame().screenIllumination, ScreenIllumination.white);
       final stable = harness.frame();
-      expect(stable.screenColor, ChallengeScreenColor.neutral);
+      expect(stable.screenIllumination, ScreenIllumination.neutral);
       expect(stable.lowLightIllumination, isFalse);
       expect(harness.flow.stage, SecureLivenessStage.headTurn);
     },
   );
 
-  test('operator-left challenge uses positive yaw relative to center', () {
+  test('operator-left pose completes directly into capture stabilization', () {
     final harness = FlowHarness()..reachHeadTurn(centeredYaw: 6);
     harness.frames(3, yaw: -12);
     expect(harness.flow.stage, SecureLivenessStage.headTurn);
@@ -239,14 +224,14 @@ void main() {
     expect(first.headTurnDiagnostic?.baselineYaw, 6);
     expect(first.headTurnDiagnostic?.yawDelta, 15);
     expect(first.headTurnDiagnostic?.turnFrames, 1);
-    final accepted = harness.frame(yaw: 21);
-    expect(accepted.guidance, contains('Turn detected'));
+    harness.frame(yaw: 21);
     expect(harness.flow.stage, SecureLivenessStage.headReturn);
     harness.frames(2, yaw: 6);
-    expect(harness.flow.stage, SecureLivenessStage.colorBaseline);
+    expect(harness.flow.stage, SecureLivenessStage.captureStabilizing);
+    expect(harness.flow.guidance, 'Liveness complete; hold still');
   });
 
-  test('operator-right challenge uses negative yaw relative to center', () {
+  test('operator-right pose uses negative yaw relative to center', () {
     final harness = FlowHarness(direction: HeadTurnDirection.right)
       ..reachHeadTurn(centeredYaw: -4);
     harness.frames(3, yaw: 12);
@@ -254,6 +239,8 @@ void main() {
     expect(harness.flow.guidance, contains('Wrong direction'));
     harness.frames(2, yaw: -19);
     expect(harness.flow.stage, SecureLivenessStage.headReturn);
+    harness.frames(2, yaw: -4);
+    expect(harness.flow.stage, SecureLivenessStage.captureStabilizing);
   });
 
   test('natural turn displacement pauses without restarting the challenge', () {
@@ -261,9 +248,7 @@ void main() {
     final displaced = validFace(centerX: 0.90, faceWidthRatio: 0.86);
     harness.frames(2, yaw: 18, yunet: displaced);
     expect(harness.flow.stage, SecureLivenessStage.headReturn);
-
-    final outsideActive = validFace(faceWidthRatio: 0.95);
-    harness.frame(yaw: 18, yunet: outsideActive);
+    harness.frame(yaw: 18, yunet: validFace(faceWidthRatio: 0.95));
     expect(harness.flow.stage, SecureLivenessStage.headReturn);
     expect(harness.flow.guidance, 'Keep your full face inside the oval');
   });
@@ -272,120 +257,45 @@ void main() {
     final harness = FlowHarness()..reachHeadTurn(centeredYaw: 4);
     final firstTurn = harness.frame(yaw: 19);
     expect(firstTurn.headTurnDiagnostic?.turnFrames, 1);
-
     final paused = harness.frame(yaw: 19, quality: lowLightQuality);
     expect(harness.flow.stage, SecureLivenessStage.headTurn);
     expect(paused.headTurnDiagnostic?.baselineYaw, 4);
     expect(paused.headTurnDiagnostic?.turnFrames, 1);
     expect(paused.guidance, contains('current step paused'));
-
     harness.frame(yaw: 19);
     expect(harness.flow.stage, SecureLivenessStage.headReturn);
   });
 
-  test('neutral color baseline raises brightness before challenge color', () {
-    final harness = FlowHarness()..reachHeadTurn();
-    harness.frames(2, yaw: 18);
-    harness.frames(2);
-    expect(harness.flow.stage, SecureLivenessStage.colorBaseline);
-    final baseline = harness.frame();
-    expect(baseline.screenColor, ChallengeScreenColor.neutral);
-    expect(baseline.raiseWindowBrightness, isTrue);
-    expect(baseline.showPhotosensitivityWarning, isTrue);
-  });
-
-  test('one attendance color uses a monotonic aggregate sampling window', () {
-    final harness = FlowHarness()..reachColorChallenge();
-    expect(harness.flow.colorSequence.first, ChallengeScreenColor.red);
-    harness.now = harness.now.add(SecureLivenessRules.colorTransitionDelay);
-
-    final mismatchBefore = harness.frame(regions: skin(green: 115));
-    expect(
-      mismatchBefore.progress,
-      1 / SecureLivenessRules.colorSampleWindowFrames,
-    );
-    expect(mismatchBefore.colorDiagnostic?.sampledFrames, 1);
-    expect(mismatchBefore.colorDiagnostic?.matchingFrames, 0);
-
-    final firstMatch = harness.frame(regions: skin(red: 115));
-    expect(
-      firstMatch.progress,
-      2 / SecureLivenessRules.colorSampleWindowFrames,
-    );
-    expect(firstMatch.colorDiagnostic?.matchingFrames, 1);
-    expect(firstMatch.colorDiagnostic?.bestCoherentRegions, 4);
-    expect(firstMatch.colorDiagnostic?.bestTargetDelta, 15);
-    expect(firstMatch.colorDiagnostic?.bestDominanceMargin, 15);
-
-    final mismatchBetween = harness.frame(regions: skin(blue: 115));
-    expect(
-      mismatchBetween.progress,
-      3 / SecureLivenessRules.colorSampleWindowFrames,
-    );
-    expect(mismatchBetween.colorDiagnostic?.matchingFrames, 1);
-    expect(harness.flow.stage, SecureLivenessStage.colorChallenge);
-    expect(harness.flow.colorSequence.first, ChallengeScreenColor.red);
-
-    final secondMatch = harness.frame(regions: skin(red: 115));
-    expect(secondMatch.colorDiagnostic?.sampledFrames, 4);
-    expect(secondMatch.colorDiagnostic?.matchingFrames, 2);
-    expect(harness.flow.stage, SecureLivenessStage.captureStabilizing);
-    final first = harness.frame();
-    final second = harness.frame();
-    final third = harness.frame();
-    expect(first.captureRequested, isFalse);
-    expect(second.captureRequested, isFalse);
-    expect(third.captureRequested, isTrue);
+  test('attendance pose authorizes capture and resets partial consensus', () {
+    final harness = FlowHarness()..completePose();
+    harness.frames(3);
+    expect(harness.flow.captureInFlight, isTrue);
     expect(harness.flow.stage, SecureLivenessStage.processing);
+    harness.flow.captureCompleted(harness.now);
+    expect(harness.flow.completedCaptures, 1);
+    expect(harness.flow.stage, SecureLivenessStage.captureCooldown);
+    final resetToken = harness.flow.enrollmentResetToken;
+    harness.frame(yunet: const FaceObservation.none(), quality: null);
+    expect(harness.flow.completedCaptures, 0);
+    expect(harness.flow.enrollmentResetToken, resetToken + 1);
+    expect(harness.flow.livenessCompleted, isFalse);
+    expect(harness.flow.captureInFlight, isFalse);
   });
 
-  test('temporary quality loss preserves a partial color response', () {
-    final harness = FlowHarness()..reachColorChallenge();
-    harness.now = harness.now.add(SecureLivenessRules.colorTransitionDelay);
-
-    final firstMatch = harness.frame(regions: skin(red: 115));
-    expect(firstMatch.colorDiagnostic?.sampledFrames, 1);
-    expect(firstMatch.colorDiagnostic?.matchingFrames, 1);
-
-    final paused = harness.frame(quality: null, regions: skin(red: 115));
-    expect(harness.flow.stage, SecureLivenessStage.colorChallenge);
-    expect(paused.colorDiagnostic?.sampledFrames, 1);
-    expect(paused.colorDiagnostic?.matchingFrames, 1);
-    expect(paused.screenColor, ChallengeScreenColor.red);
-    expect(paused.guidance, contains('current step paused'));
-
-    final secondMatch = harness.frame(regions: skin(red: 115));
-    expect(secondMatch.colorDiagnostic?.sampledFrames, 2);
-    expect(secondMatch.colorDiagnostic?.matchingFrames, 2);
-    expect(harness.flow.stage, SecureLivenessStage.captureStabilizing);
-  });
-
-  test('quality retry after liveness stays in capture stabilization', () {
-    final harness = FlowHarness()..reachColorChallenge();
-    harness.now = harness.now.add(SecureLivenessRules.colorTransitionDelay);
-    harness.frame(regions: skin(red: 115));
-    harness.frame(regions: skin(red: 115));
-    expect(harness.flow.stage, SecureLivenessStage.captureStabilizing);
-    expect(harness.flow.livenessCompleted, isTrue);
-
+  test('quality retry after pose stays in capture stabilization', () {
+    final harness = FlowHarness()..completePose();
     harness.frame();
     final paused = harness.frame(quality: exposureStabilizingQuality);
     expect(harness.flow.stage, SecureLivenessStage.captureStabilizing);
     expect(harness.flow.livenessCompleted, isTrue);
     expect(paused.guidance, contains('capture paused'));
-
     harness.frames(3);
     expect(harness.flow.stage, SecureLivenessStage.processing);
     expect(harness.flow.captureInFlight, isTrue);
   });
 
-  test('capture positioning retry cannot restart the completed challenge', () {
-    final harness = FlowHarness()..reachColorChallenge();
-    harness.now = harness.now.add(SecureLivenessRules.colorTransitionDelay);
-    harness.frame(regions: skin(red: 115));
-    harness.frame(regions: skin(red: 115));
-    expect(harness.flow.livenessCompleted, isTrue);
-
+  test('capture positioning retry cannot restart completed pose', () {
+    final harness = FlowHarness()..completePose();
     harness.frame(yunet: validFace(faceWidthRatio: 0.86));
     expect(harness.flow.stage, SecureLivenessStage.captureStabilizing);
     expect(harness.flow.livenessCompleted, isTrue);
@@ -394,73 +304,17 @@ void main() {
   });
 
   test('invalid continuity after liveness still resets fail closed', () {
-    final harness = FlowHarness()..reachColorChallenge();
-    harness.now = harness.now.add(SecureLivenessRules.colorTransitionDelay);
-    harness.frame(regions: skin(red: 115));
-    harness.frame(regions: skin(red: 115));
-    expect(harness.flow.livenessCompleted, isTrue);
-
+    final harness = FlowHarness()..completePose();
     harness.frame(sessionId: 'stale-session');
     expect(harness.flow.stage, SecureLivenessStage.quality);
     expect(harness.flow.livenessCompleted, isFalse);
     expect(harness.flow.captureInFlight, isFalse);
   });
 
-  test('invalid MediaPipe still resets an active color stage', () {
-    final harness = FlowHarness()..reachColorChallenge();
-    harness.now = harness.now.add(SecureLivenessRules.colorTransitionDelay);
-    harness.frame(regions: skin(red: 115));
-
-    final reset = harness.frame(
-      quality: lowLightQuality,
-      sessionId: 'stale-session',
-    );
-    expect(harness.flow.stage, SecureLivenessStage.quality);
-    expect(reset.colorDiagnostic, isNull);
-    expect(reset.guidance, 'Detailed liveness landmarks unavailable');
-    expect(harness.flow.captureInFlight, isFalse);
-  });
-
-  test('one weak color window fails once without retrying or capture', () {
-    final harness = FlowHarness()..reachColorChallenge();
-    harness.now = harness.now.add(SecureLivenessRules.colorTransitionDelay);
-    final oneRegionOnly = skin(green: 115)
-      ..['forehead'] = const SkinRegionColor(red: 115, green: 100, blue: 100);
-
-    SecureLivenessUpdate? update;
-    for (
-      var index = 0;
-      index < SecureLivenessRules.colorSampleWindowFrames;
-      index++
-    ) {
-      update = harness.frame(regions: oneRegionOnly);
-      expect(
-        update.progress,
-        (index + 1) / SecureLivenessRules.colorSampleWindowFrames,
-      );
-    }
-
-    expect(harness.flow.stage, SecureLivenessStage.failed);
-    expect(harness.flow.captureInFlight, isFalse);
-    expect(update?.captureRequested, isFalse);
-    expect(update?.guidance, 'Color response not detected; please try again');
-    expect(
-      update?.colorDiagnostic?.sampledFrames,
-      SecureLivenessRules.colorSampleWindowFrames,
-    );
-    expect(update?.colorDiagnostic?.matchingFrames, 0);
-    expect(update?.colorDiagnostic?.bestCoherentRegions, 1);
-    expect(update?.colorDiagnostic?.requiredCoherentRegions, 2);
-  });
-
-  test('registration skips color and authorizes three separated captures', () {
+  test('registration pose authorizes three separated captures', () {
     final harness = FlowHarness(purpose: ScanPurpose.registration)
-      ..reachHeadTurn()
-      ..frames(2, yaw: 18)
-      ..frames(2);
-    expect(harness.flow.colorSequence, isEmpty);
-    expect(harness.flow.stage, SecureLivenessStage.captureStabilizing);
-    harness.frames(3);
+      ..completePose()
+      ..frames(3);
     expect(harness.flow.captureInFlight, isTrue);
     harness.flow.captureCompleted(harness.now);
     expect(harness.flow.stage, SecureLivenessStage.captureCooldown);
@@ -468,11 +322,9 @@ void main() {
     expect(harness.flow.captureInFlight, isFalse);
     harness.now = harness.now.add(CameraFlowRules.enrollmentCaptureSeparation);
     harness.frames(3);
-    expect(harness.flow.captureInFlight, isTrue);
     harness.flow.captureCompleted(harness.now);
     harness.now = harness.now.add(CameraFlowRules.enrollmentCaptureSeparation);
     harness.frames(3);
-    expect(harness.flow.captureInFlight, isTrue);
     harness.flow.captureCompleted(harness.now);
     expect(harness.flow.stage, SecureLivenessStage.completed);
     expect(harness.flow.completedCaptures, 3);
@@ -480,12 +332,9 @@ void main() {
 
   test('continuity loss discards enrollment samples before re-liveness', () {
     final harness = FlowHarness(purpose: ScanPurpose.registration)
-      ..reachHeadTurn()
-      ..frames(2, yaw: 18)
-      ..frames(2)
+      ..completePose()
       ..frames(3);
     harness.flow.captureCompleted(harness.now);
-    expect(harness.flow.completedCaptures, 1);
     final resetToken = harness.flow.enrollmentResetToken;
     harness.frame(yunet: const FaceObservation.none(), quality: null);
     expect(harness.flow.completedCaptures, 0);

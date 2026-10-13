@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from pytorch_metric_learning.losses import ArcFaceLoss
 from torch import Tensor, nn
+from pytorch_metric_learning.losses import ArcFaceLoss
 
 
 class ArcFaceTrainingHead(nn.Module):

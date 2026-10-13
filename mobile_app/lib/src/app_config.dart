@@ -5,8 +5,13 @@ class AppConfig {
 
   static const apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'https://api.example.com',
+    defaultValue: 'https://agila-thesis.onrender.com',
   );
+
+  static bool debugModeEnabled(
+    bool storedValue, {
+    bool releaseMode = kReleaseMode,
+  }) => !releaseMode && storedValue;
 
   static Uri backendUri(String value, {bool releaseMode = kReleaseMode}) {
     final uri = Uri.tryParse(value.trim());

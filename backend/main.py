@@ -28,7 +28,9 @@ from backend.models import (
     AuthSession,
     DeliveryAssignment,
     DeliveryLocation,
+    DeviceReplacementRequest,
     DriverProfile,
+    FaceReregistrationRequest,
     utcnow,
 )
 from backend.rate_limit import SensitiveRateLimiter
@@ -38,13 +40,24 @@ from backend.schemas import (
     DeliveryAssignmentUpdateRequest,
     DeliveryLocationCreateRequest,
     DeliveryLocationUpdateRequest,
+    DeliveryRouteStopsUpdateRequest,
+    DeviceChallengeRequest,
+    DeviceReplacementDecisionRequest,
+    DeviceReplacementRequestCreate,
     DriverActivateRequest,
     DriverCreateRequest,
+    DriverLoginRequest,
+    FaceReregistrationDecisionRequest,
     LoginRequest,
     PasswordChangeRequest,
     RefreshRequest,
 )
-from backend.security import decode_access_token, generate_csrf_token
+from backend.security import (
+    create_device_challenge,
+    decode_access_token,
+    generate_csrf_token,
+    verify_device_proof,
+)
 from backend.services import (
     AppError,
     activate_driver,
@@ -54,10 +67,15 @@ from backend.services import (
     authenticate,
     aware,
     change_password,
+    complete_device_face_enrollment,
+    count_assignments,
+    count_drivers,
+    count_locations,
     create_assignment,
     create_driver,
     create_location,
     create_session_tokens,
+    decide_device_replacement,
     delete_driver,
     delete_location,
     driver_account,
@@ -66,10 +84,13 @@ from backend.services import (
     get_locations,
     issue_activation_code,
     latest_completed_assignment_for_driver,
+    request_device_replacement,
+    require_authorized_device,
     rotate_refresh,
     set_driver_status,
     store_attendance,
     update_assignment_status,
+    update_assignment_stops,
     update_location,
 )
 
@@ -78,6 +99,16 @@ ACCESS_COOKIE = "fleet_access"
 REFRESH_COOKIE = "fleet_refresh"
 CSRF_COOKIE = "fleet_csrf"
 LOGGER = logging.getLogger(__name__)
+DEFAULT_PAGE_SIZE = 20
+
+
+def page_metadata(count: int, page: int, page_size: int) -> dict[str, int]:
+    return {
+        "count": count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": max(1, (count + page_size - 1) // page_size),
+    }
 
 
 def account_json(account: Account) -> dict[str, object]:
@@ -94,6 +125,23 @@ def account_json(account: Account) -> dict[str, object]:
         result["full_name"] = account.driver_profile.full_name
         result["phone"] = account.driver_profile.phone
         result["notes"] = account.driver_profile.notes
+        profile = account.driver_profile
+        result["device_authorization"] = {
+            "status": (
+                "unbound"
+                if not profile.authorized_device_fingerprint
+                else "enrollment_required"
+                if profile.device_face_enrolled_at is None
+                else "ready"
+            ),
+            "device_label": profile.authorized_device_label,
+            "authorized_at": profile.device_authorized_at,
+            "fingerprint_prefix": (
+                profile.authorized_device_fingerprint[:12]
+                if profile.authorized_device_fingerprint
+                else None
+            ),
+        }
     return result
 
 
@@ -135,13 +183,69 @@ def location_json(location: DeliveryLocation) -> dict[str, object]:
 
 def assignment_json(assignment: DeliveryAssignment) -> dict[str, object]:
     profile = assignment.driver.driver_profile
+    active_stops = sorted(
+        (stop for stop in assignment.stops if stop.removed_at is None),
+        key=lambda stop: stop.stop_order,
+    )
+    current_stop = next(
+        (stop for stop in active_stops if stop.completed_at is None), None
+    )
+    display_stop = current_stop or (active_stops[-1] if active_stops else None)
+    display_location = display_stop.location if display_stop else assignment.location
+    stops = []
+    for stop in active_stops:
+        if stop.completed_at is not None:
+            state = "completed"
+        elif assignment.status == "cancelled":
+            state = "cancelled"
+        elif stop is current_stop:
+            state = "current"
+        else:
+            state = "upcoming"
+        stops.append(
+            {
+                "id": stop.id,
+                "order": stop.stop_order,
+                "state": state,
+                "completed_at": stop.completed_at,
+                "location": location_json(stop.location),
+            }
+        )
+    if not stops:
+        legacy_state = (
+            "completed"
+            if assignment.status == "completed"
+            else "cancelled"
+            if assignment.status == "cancelled"
+            else "current"
+        )
+        stops = [
+            {
+                "id": None,
+                "order": 1,
+                "state": legacy_state,
+                "completed_at": assignment.completed_at,
+                "location": location_json(assignment.location),
+            }
+        ]
     return {
         "id": assignment.id,
         "driver_id": assignment.driver_account_id,
         "employee_id": profile.employee_id,
         "driver_name": profile.full_name,
         "driver_status": assignment.driver.status,
-        "location": location_json(assignment.location),
+        "location": location_json(display_location),
+        "route_name": assignment.route_name,
+        "stops": stops,
+        "completed_stop_count": sum(
+            1 for stop in stops if stop["state"] == "completed"
+        ),
+        "total_stop_count": len(stops),
+        "current_stop_id": (
+            current_stop.id
+            if current_stop and assignment.status in {"assigned", "in_progress"}
+            else None
+        ),
         "assigned_by": assignment.assigned_by_manager_id,
         "assigned_at": assignment.assigned_at,
         "scheduled_at": assignment.scheduled_at,
@@ -150,6 +254,41 @@ def assignment_json(assignment: DeliveryAssignment) -> dict[str, object]:
         "completed_at": assignment.completed_at,
         "updated_at": assignment.updated_at,
     }
+
+
+def face_reregistration_json(
+    request: FaceReregistrationRequest, profile: DriverProfile | None = None
+) -> dict[str, object]:
+    result: dict[str, object] = {
+        "id": request.id,
+        "driver_id": request.driver_account_id,
+        "requested_at": request.requested_at,
+        "status": request.status,
+        "decided_at": request.decided_at,
+        "consumed_at": request.consumed_at,
+    }
+    if profile is not None:
+        result["driver_name"] = profile.full_name
+        result["employee_id"] = profile.employee_id
+    return result
+
+
+def device_replacement_json(
+    request: DeviceReplacementRequest, profile: DriverProfile | None = None
+) -> dict[str, object]:
+    result: dict[str, object] = {
+        "id": request.id,
+        "driver_id": request.driver_account_id,
+        "requested_at": request.requested_at,
+        "status": request.status,
+        "decided_at": request.decided_at,
+        "device_label": request.candidate_device_label,
+        "fingerprint_prefix": request.candidate_fingerprint[:12],
+    }
+    if profile is not None:
+        result["driver_name"] = profile.full_name
+        result["employee_id"] = profile.employee_id
+    return result
 
 
 def set_manager_cookies(
@@ -342,6 +481,18 @@ def create_app(
             or account.role != payload.get("role")
         ):
             raise AppError(401, "Session expired")
+        if account.role == "driver":
+            profile = db.get(DriverProfile, account.id)
+            if (
+                profile is None
+                or not profile.authorized_device_fingerprint
+                or not session.device_fingerprint
+                or not hmac.compare_digest(
+                    profile.authorized_device_fingerprint,
+                    session.device_fingerprint,
+                )
+            ):
+                raise AppError(401, "Session expired")
         return account, session, from_cookie
 
     def require_role(role: str) -> Callable:
@@ -462,7 +613,122 @@ def create_app(
             "pending_deliveries": assignment_counts.get("assigned", 0),
             "in_progress_deliveries": assignment_counts.get("in_progress", 0),
             "completed_today": completed_today or 0,
+            "pending_face_reregistrations": db.scalar(
+                select(func.count(FaceReregistrationRequest.id)).where(
+                    FaceReregistrationRequest.status == "pending"
+                )
+            )
+            or 0,
+            "pending_device_replacements": db.scalar(
+                select(func.count(DeviceReplacementRequest.id)).where(
+                    DeviceReplacementRequest.status == "pending"
+                )
+            )
+            or 0,
         }
+
+    @app.get("/api/manager/device-replacement-requests")
+    def manager_device_replacement_requests(
+        _account: Annotated[Account, Depends(manager)],
+        db: Annotated[Session, Depends(get_db)],
+        status: str | None = "pending",
+        page: Annotated[int, Query(ge=1)] = 1,
+        page_size: Annotated[int, Query(ge=1, le=100)] = DEFAULT_PAGE_SIZE,
+    ):
+        query = (
+            select(DeviceReplacementRequest, DriverProfile)
+            .join(
+                DriverProfile,
+                DriverProfile.account_id == DeviceReplacementRequest.driver_account_id,
+            )
+            .order_by(DeviceReplacementRequest.requested_at.desc())
+        )
+        if status:
+            query = query.where(DeviceReplacementRequest.status == status)
+        count_query = select(func.count()).select_from(query.order_by(None).subquery())
+        count = int(db.scalar(count_query) or 0)
+        rows = db.execute(query.offset((page - 1) * page_size).limit(page_size)).all()
+        return {
+            "requests": [
+                device_replacement_json(request, profile) for request, profile in rows
+            ],
+            **page_metadata(count, page, page_size),
+        }
+
+    @app.patch(
+        "/api/manager/device-replacement-requests/{request_id}",
+        dependencies=[Depends(require_csrf)],
+    )
+    def decide_device_replacement_request(
+        request_id: str,
+        body: DeviceReplacementDecisionRequest,
+        account: Annotated[Account, Depends(manager)],
+        db: Annotated[Session, Depends(get_db)],
+    ):
+        item = db.scalar(
+            select(DeviceReplacementRequest)
+            .where(DeviceReplacementRequest.id == request_id)
+            .with_for_update()
+        )
+        if item is None:
+            raise AppError(404, "Device replacement request not found")
+        return {
+            "request": device_replacement_json(
+                decide_device_replacement(db, account, item, body.decision)
+            )
+        }
+
+    @app.get("/api/manager/face-reregistration-requests")
+    def manager_face_reregistration_requests(
+        _account: Annotated[Account, Depends(manager)],
+        db: Annotated[Session, Depends(get_db)],
+        status: str | None = "pending",
+        page: Annotated[int, Query(ge=1)] = 1,
+        page_size: Annotated[int, Query(ge=1, le=100)] = DEFAULT_PAGE_SIZE,
+    ):
+        query = (
+            select(FaceReregistrationRequest, DriverProfile)
+            .join(
+                DriverProfile,
+                DriverProfile.account_id == FaceReregistrationRequest.driver_account_id,
+            )
+            .order_by(FaceReregistrationRequest.requested_at.desc())
+        )
+        if status:
+            query = query.where(FaceReregistrationRequest.status == status)
+        count_query = select(func.count()).select_from(query.order_by(None).subquery())
+        count = int(db.scalar(count_query) or 0)
+        rows = db.execute(query.offset((page - 1) * page_size).limit(page_size)).all()
+        return {
+            "requests": [
+                face_reregistration_json(request, profile) for request, profile in rows
+            ],
+            **page_metadata(count, page, page_size),
+        }
+
+    @app.patch(
+        "/api/manager/face-reregistration-requests/{request_id}",
+        dependencies=[Depends(require_csrf)],
+    )
+    def decide_face_reregistration_request(
+        request_id: str,
+        body: FaceReregistrationDecisionRequest,
+        account: Annotated[Account, Depends(manager)],
+        db: Annotated[Session, Depends(get_db)],
+    ):
+        item = db.get(FaceReregistrationRequest, request_id)
+        if item is None:
+            raise AppError(404, "Face re-registration request not found")
+        if item.status != "pending":
+            raise AppError(409, "Face re-registration request already decided")
+        item.status = "approved" if body.decision == "approve" else "rejected"
+        item.decided_at = utcnow()
+        item.decided_by_manager_id = account.id
+        audit(
+            db, f"face_reregistration_{item.status}", item.driver_account_id, account.id
+        )
+        db.commit()
+        return {"request": face_reregistration_json(item)}
 
     @app.get("/api/manager/drivers")
     def list_drivers(
@@ -470,12 +736,23 @@ def create_app(
         db: Annotated[Session, Depends(get_db)],
         search: str | None = None,
         status: str | None = None,
+        sort: str = "name_asc",
+        page: Annotated[int, Query(ge=1)] = 1,
+        page_size: Annotated[int, Query(ge=1, le=100)] = DEFAULT_PAGE_SIZE,
     ):
         del account
-        drivers = get_drivers(db, search, status)
+        count = count_drivers(db, search, status)
+        drivers = get_drivers(
+            db,
+            search,
+            status,
+            offset=(page - 1) * page_size,
+            limit=page_size,
+            sort=sort,
+        )
         return {
             "drivers": [account_json(item) for item in drivers],
-            "count": len(drivers),
+            **page_metadata(count, page, page_size),
         }
 
     @app.post(
@@ -547,9 +824,9 @@ def create_app(
     ):
         item = driver_account(db, driver_id)
         if item.status == "disabled":
-            raise AppError(409, "Driver account disabled")
+            raise AppError(409, "Field Personnel account disabled")
         if item.status == "active":
-            raise AppError(409, "Driver is already activated")
+            raise AppError(409, "Field Personnel is already activated")
         code, expires = issue_activation_code(db, account.id, item.id, settings)
         audit(db, "activation_code_regenerated", item.id, account.id)
         db.commit()
@@ -607,12 +884,20 @@ def create_app(
         driver_id: str,
         _account: Annotated[Account, Depends(manager)],
         db: Annotated[Session, Depends(get_db)],
+        page: Annotated[int, Query(ge=1)] = 1,
+        page_size: Annotated[int, Query(ge=1, le=100)] = DEFAULT_PAGE_SIZE,
     ):
         driver_account(db, driver_id)
+        filters = AccountAuditLog.target_account_id == driver_id
+        count = int(
+            db.scalar(select(func.count(AccountAuditLog.id)).where(filters)) or 0
+        )
         entries = db.scalars(
             select(AccountAuditLog)
-            .where(AccountAuditLog.target_account_id == driver_id)
-            .order_by(AccountAuditLog.created_at.desc())
+            .where(filters)
+            .order_by(AccountAuditLog.created_at.desc(), AccountAuditLog.id.asc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
         )
         return {
             "audit": [
@@ -623,22 +908,27 @@ def create_app(
                     "created_at": item.created_at,
                 }
                 for item in entries
-            ]
+            ],
+            **page_metadata(count, page, page_size),
         }
 
     @app.get("/api/manager/audit")
     def manager_audit(
         _account: Annotated[Account, Depends(manager)],
         db: Annotated[Session, Depends(get_db)],
+        page: Annotated[int, Query(ge=1)] = 1,
+        page_size: Annotated[int, Query(ge=1, le=100)] = DEFAULT_PAGE_SIZE,
     ):
+        count = int(db.scalar(select(func.count(AccountAuditLog.id))) or 0)
         entries = db.execute(
             select(AccountAuditLog, DriverProfile)
             .outerjoin(
                 DriverProfile,
                 DriverProfile.account_id == AccountAuditLog.target_account_id,
             )
-            .order_by(AccountAuditLog.created_at.desc())
-            .limit(100)
+            .order_by(AccountAuditLog.created_at.desc(), AccountAuditLog.id.asc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
         ).all()
         return {
             "audit": [
@@ -652,7 +942,8 @@ def create_app(
                     "created_at": item.created_at,
                 }
                 for item, profile in entries
-            ]
+            ],
+            **page_metadata(count, page, page_size),
         }
 
     @app.get("/api/manager/locations")
@@ -660,11 +951,21 @@ def create_app(
         _account: Annotated[Account, Depends(manager)],
         db: Annotated[Session, Depends(get_db)],
         active: bool | None = None,
+        sort: str = "name_asc",
+        page: Annotated[int, Query(ge=1)] = 1,
+        page_size: Annotated[int, Query(ge=1, le=100)] = DEFAULT_PAGE_SIZE,
     ):
-        locations = get_locations(db, active)
+        count = count_locations(db, active)
+        locations = get_locations(
+            db,
+            active,
+            offset=(page - 1) * page_size,
+            limit=page_size,
+            sort=sort,
+        )
         return {
             "locations": [location_json(location) for location in locations],
-            "count": len(locations),
+            **page_metadata(count, page, page_size),
         }
 
     @app.post(
@@ -710,6 +1011,9 @@ def create_app(
         driver_id: str | None = None,
         status: str | None = None,
         assignment_date: Annotated[date | None, Query(alias="date")] = None,
+        sort: str = "assigned_desc",
+        page: Annotated[int, Query(ge=1)] = 1,
+        page_size: Annotated[int, Query(ge=1, le=100)] = DEFAULT_PAGE_SIZE,
     ):
         if status and status not in {
             "assigned",
@@ -717,15 +1021,25 @@ def create_app(
             "completed",
             "cancelled",
         }:
-            raise AppError(400, "Invalid delivery status")
+            raise AppError(400, "Invalid Site Assignment status")
         start = end = None
         if assignment_date:
             start = datetime.combine(assignment_date, datetime.min.time(), timezone.utc)
             end = datetime.combine(assignment_date, datetime.max.time(), timezone.utc)
-        assignments = get_assignments(db, driver_id, status, start, end)
+        count = count_assignments(db, driver_id, status, start, end)
+        assignments = get_assignments(
+            db,
+            driver_id,
+            status,
+            start,
+            end,
+            offset=(page - 1) * page_size,
+            limit=page_size,
+            sort=sort,
+        )
         return {
             "assignments": [assignment_json(item) for item in assignments],
-            "count": len(assignments),
+            **page_metadata(count, page, page_size),
         }
 
     @app.post(
@@ -764,6 +1078,28 @@ def create_app(
             )
         }
 
+    @app.put(
+        "/api/manager/deliveries/{assignment_id}/stops",
+        dependencies=[Depends(require_csrf)],
+    )
+    def edit_delivery_stops(
+        assignment_id: str,
+        body: DeliveryRouteStopsUpdateRequest,
+        account: Annotated[Account, Depends(manager)],
+        db: Annotated[Session, Depends(get_db)],
+    ):
+        return {
+            "assignment": assignment_json(
+                update_assignment_stops(db, account, assignment_id, body)
+            )
+        }
+
+    @app.post("/api/driver/auth/device-challenge")
+    def driver_device_challenge(body: DeviceChallengeRequest):
+        return {
+            "challenge": create_device_challenge(body.login_id, body.purpose, settings)
+        }
+
     @app.post("/api/driver/activate")
     def driver_activate(
         body: DriverActivateRequest,
@@ -773,20 +1109,41 @@ def create_app(
         keys = sensitive_keys(request, "driver-activate", body.employee_id)
         require_sensitive_attempt(keys)
         try:
-            account = activate_driver(
-                db, body.employee_id, body.activation_code, body.password, settings
+            public_key, fingerprint = verify_device_proof(
+                login_id=body.employee_id,
+                purpose="activate",
+                public_key=body.device_public_key,
+                challenge=body.device_challenge,
+                signature=body.device_signature,
+                settings=settings,
             )
-        except AppError:
+            account = activate_driver(
+                db,
+                body.employee_id,
+                body.activation_code,
+                body.password,
+                settings,
+                device_public_key=public_key,
+                device_fingerprint=fingerprint,
+                device_label=body.device_label,
+            )
+        except (AppError, ValueError):
             limiter.record_failure(*keys)
-            raise
+            raise AppError(400, "Activation code or device proof is invalid")
         limiter.clear(keys[0])
         account.driver_profile = db.get(DriverProfile, account.id)
-        tokens = create_session_tokens(db, account, settings, body.device_label)
+        tokens = create_session_tokens(
+            db,
+            account,
+            settings,
+            body.device_label,
+            device_fingerprint=fingerprint,
+        )
         return {**tokens, "driver": account_json(account)}
 
     @app.post("/api/driver/auth/login")
     def driver_login(
-        body: LoginRequest,
+        body: DriverLoginRequest,
         request: Request,
         db: Annotated[Session, Depends(get_db)],
     ):
@@ -794,21 +1151,91 @@ def create_app(
         require_sensitive_attempt(keys)
         try:
             account = authenticate(db, body.login_id.upper(), body.password, "driver")
+            public_key, fingerprint = verify_device_proof(
+                login_id=body.login_id,
+                purpose="login",
+                public_key=body.device_public_key,
+                challenge=body.device_challenge,
+                signature=body.device_signature,
+                settings=settings,
+            )
+            require_authorized_device(db, account, public_key, fingerprint)
+        except ValueError:
+            limiter.record_failure(*keys)
+            raise AppError(401, "Invalid login credentials")
         except AppError:
             limiter.record_failure(*keys)
             raise
         limiter.clear(keys[0])
         account.driver_profile = db.get(DriverProfile, account.id)
-        tokens = create_session_tokens(db, account, settings, body.device_label)
+        tokens = create_session_tokens(
+            db,
+            account,
+            settings,
+            body.device_label,
+            device_fingerprint=fingerprint,
+        )
         return {**tokens, "driver": account_json(account)}
 
     @app.post("/api/driver/auth/refresh")
     def driver_refresh(body: RefreshRequest, db: Annotated[Session, Depends(get_db)]):
         if not body.refresh_token:
             raise AppError(401, "Session expired")
-        account, tokens = rotate_refresh(db, body.refresh_token, settings, "driver")
+        try:
+            public_key, fingerprint = verify_device_proof(
+                login_id=body.login_id,
+                purpose="refresh",
+                public_key=body.device_public_key,
+                challenge=body.device_challenge,
+                signature=body.device_signature,
+                settings=settings,
+            )
+        except ValueError as error:
+            raise AppError(401, "Session expired") from error
+        account, tokens = rotate_refresh(
+            db,
+            body.refresh_token,
+            settings,
+            "driver",
+            device_fingerprint=fingerprint,
+        )
+        require_authorized_device(db, account, public_key, fingerprint)
         account.driver_profile = db.get(DriverProfile, account.id)
         return {**tokens, "driver": account_json(account)}
+
+    @app.post("/api/driver/device-replacement-request", status_code=201)
+    def driver_device_replacement_request(
+        body: DeviceReplacementRequestCreate,
+        request: Request,
+        db: Annotated[Session, Depends(get_db)],
+    ):
+        keys = sensitive_keys(request, "driver-device-replacement", body.login_id)
+        require_sensitive_attempt(keys)
+        try:
+            account = authenticate(db, body.login_id.upper(), body.password, "driver")
+            public_key, fingerprint = verify_device_proof(
+                login_id=body.login_id,
+                purpose="replace",
+                public_key=body.device_public_key,
+                challenge=body.device_challenge,
+                signature=body.device_signature,
+                settings=settings,
+            )
+            item = request_device_replacement(
+                db,
+                account,
+                candidate_public_key=public_key,
+                candidate_fingerprint=fingerprint,
+                device_label=body.device_label,
+            )
+        except ValueError:
+            limiter.record_failure(*keys)
+            raise AppError(401, "Invalid login credentials")
+        except AppError:
+            limiter.record_failure(*keys)
+            raise
+        limiter.clear(keys[0])
+        return {"request": device_replacement_json(item)}
 
     @app.post("/api/driver/auth/logout")
     def driver_logout(
@@ -848,7 +1275,71 @@ def create_app(
         result["recent_delivery"] = (
             assignment_json(recent_delivery) if recent_delivery else None
         )
+        face_request = db.scalar(
+            select(FaceReregistrationRequest).where(
+                FaceReregistrationRequest.driver_account_id == account.id
+            )
+        )
+        result["face_reregistration_request"] = (
+            face_reregistration_json(face_request) if face_request else None
+        )
         return {"driver": result}
+
+    @app.post("/api/driver/device/enrollment-complete")
+    def driver_device_enrollment_complete(
+        account: Annotated[Account, Depends(driver)],
+        db: Annotated[Session, Depends(get_db)],
+    ):
+        complete_device_face_enrollment(db, account)
+        return {"ok": True}
+
+    @app.post("/api/driver/face-reregistration-request", status_code=201)
+    def request_face_reregistration(
+        account: Annotated[Account, Depends(driver)],
+        db: Annotated[Session, Depends(get_db)],
+    ):
+        item = db.scalar(
+            select(FaceReregistrationRequest).where(
+                FaceReregistrationRequest.driver_account_id == account.id
+            )
+        )
+        if item is not None and item.status in {"pending", "approved"}:
+            raise AppError(
+                409,
+                "A face re-registration request is already pending"
+                if item.status == "pending"
+                else "Face re-registration is already approved",
+            )
+        if item is None:
+            item = FaceReregistrationRequest(driver_account_id=account.id)
+            db.add(item)
+        else:
+            item.status = "pending"
+            item.requested_at = utcnow()
+            item.decided_at = None
+            item.decided_by_manager_id = None
+            item.consumed_at = None
+        audit(db, "face_reregistration_requested", account.id, account.id)
+        db.commit()
+        return {"request": face_reregistration_json(item)}
+
+    @app.post("/api/driver/face-reregistration-request/consume")
+    def consume_face_reregistration_approval(
+        account: Annotated[Account, Depends(driver)],
+        db: Annotated[Session, Depends(get_db)],
+    ):
+        item = db.scalar(
+            select(FaceReregistrationRequest).where(
+                FaceReregistrationRequest.driver_account_id == account.id
+            )
+        )
+        if item is None or item.status != "approved":
+            raise AppError(403, "Face re-registration is not approved")
+        item.status = "consumed"
+        item.consumed_at = utcnow()
+        audit(db, "face_reregistration_consumed", account.id, account.id)
+        db.commit()
+        return {"request": face_reregistration_json(item)}
 
     @app.post("/attendance/sync")
     def attendance_sync(
@@ -877,6 +1368,9 @@ def create_app(
         db: Annotated[Session, Depends(get_db)],
         driver_id: str | None = None,
         attendance_date: Annotated[date | None, Query(alias="date")] = None,
+        sort: str = "captured_desc",
+        page: Annotated[int, Query(ge=1)] = 1,
+        page_size: Annotated[int, Query(ge=1, le=100)] = DEFAULT_PAGE_SIZE,
     ):
         query = (
             select(AttendanceRecord, DriverProfile, DeliveryLocation)
@@ -887,7 +1381,6 @@ def create_app(
             .outerjoin(
                 DeliveryLocation, DeliveryLocation.id == AttendanceRecord.site_id
             )
-            .order_by(AttendanceRecord.captured_at_utc.desc())
         )
         if driver_id:
             query = query.where(AttendanceRecord.driver_account_id == driver_id)
@@ -895,13 +1388,40 @@ def create_app(
             start = datetime.combine(attendance_date, datetime.min.time(), timezone.utc)
             end = datetime.combine(attendance_date, datetime.max.time(), timezone.utc)
             query = query.where(AttendanceRecord.captured_at_utc.between(start, end))
-        rows = db.execute(query).all()
+        ordering = {
+            "captured_desc": (
+                AttendanceRecord.captured_at_utc.desc(),
+                AttendanceRecord.id.asc(),
+            ),
+            "captured_asc": (
+                AttendanceRecord.captured_at_utc.asc(),
+                AttendanceRecord.id.asc(),
+            ),
+            "received_desc": (
+                AttendanceRecord.server_received_at.desc(),
+                AttendanceRecord.id.asc(),
+            ),
+            "driver_asc": (
+                DriverProfile.full_name.asc(),
+                AttendanceRecord.captured_at_utc.desc(),
+            ),
+            "site_asc": (
+                DeliveryLocation.name.asc(),
+                AttendanceRecord.captured_at_utc.desc(),
+            ),
+        }
+        query = query.order_by(*ordering.get(sort, ordering["captured_desc"]))
+        count = int(
+            db.scalar(select(func.count()).select_from(query.order_by(None).subquery()))
+            or 0
+        )
+        rows = db.execute(query.offset((page - 1) * page_size).limit(page_size)).all()
         return {
             "attendance": [
                 attendance_json(record, profile, location)
                 for record, profile, location in rows
             ],
-            "count": len(rows),
+            **page_metadata(count, page, page_size),
         }
 
     @app.get("/api/manager/attendance/{attendance_id}")

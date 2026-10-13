@@ -13,6 +13,7 @@ from ai.src.evaluation import (
     metrics_at_threshold,
     pair_scores,
 )
+from ai.src.evaluation.runner import run_evaluation
 from ai.src.evaluation.lfw_external import fixed_threshold_metrics
 
 
@@ -23,7 +24,8 @@ class _Record:
 
 def test_pairs_are_balanced_unique_and_deterministic() -> None:
     records = tuple(
-        _Record(identity) for identity in ("a", "a", "a", "b", "b", "b", "c", "c", "c")
+        _Record(identity)
+        for identity in ("a", "a", "a", "b", "b", "b", "c", "c", "c")
     )
     first = generate_verification_pairs(records, seed=20260727)
     second = generate_verification_pairs(records, seed=20260727)
@@ -83,12 +85,45 @@ def test_fixed_threshold_reports_balanced_error_not_eer() -> None:
 
 def test_non_normalized_embeddings_are_rejected() -> None:
     embeddings = np.ones((2, 128), dtype=np.float32)
+    records = (_Record("a"), _Record("b"))
     pairs = generate_verification_pairs(
         (_Record("a"), _Record("a"), _Record("b"), _Record("b")),
         seed=1,
     )
     with pytest.raises(ValueError, match="L2 normalized"):
         pair_scores(embeddings, pairs)
+
+
+def test_held_out_mode_requires_a_locked_threshold() -> None:
+    with pytest.raises(ValueError, match="requires a threshold"):
+        run_evaluation(
+            mode="evaluate",
+            aligned_root="unused",
+            manifest_path="unused",
+            partition="held_out",
+            checkpoint_path="unused",
+            expected_checkpoint_sha256="0" * 64,
+            pair_manifest_path="unused",
+            output_path="unused",
+            batch_size=4,
+            seed=1,
+        )
+
+
+def test_calibration_rejects_non_validation_partition() -> None:
+    with pytest.raises(ValueError, match="only on validation"):
+        run_evaluation(
+            mode="calibrate",
+            aligned_root="unused",
+            manifest_path="unused",
+            partition="held_out",
+            checkpoint_path="unused",
+            expected_checkpoint_sha256="0" * 64,
+            pair_manifest_path="unused",
+            output_path="unused",
+            batch_size=4,
+            seed=1,
+        )
 
 
 def test_lfw_fixed_metrics_count_missing_preprocessing_as_rejection() -> None:

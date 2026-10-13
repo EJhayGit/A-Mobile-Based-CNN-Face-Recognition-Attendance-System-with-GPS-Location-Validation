@@ -4,6 +4,7 @@ import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import android.content.ActivityNotFoundException
+import android.content.ClipData
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -11,12 +12,15 @@ import io.flutter.FlutterInjector
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import androidx.core.content.FileProvider
+import java.io.File
 import java.nio.FloatBuffer
 import kotlin.math.sqrt
 
 class MainActivity : FlutterActivity() {
     private val channelName = "thesis.embedding/runtime"
     private val navigationChannelName = "thesis.navigation/runtime"
+    private val biometricShareChannelName = "thesis.biometric_testing/share"
     private val modelAsset = "assets/models/final_face_embedding_fp32_opset18.onnx"
     private val environment: OrtEnvironment by lazy { OrtEnvironment.getEnvironment() }
     private var session: OrtSession? = null
@@ -24,6 +28,7 @@ class MainActivity : FlutterActivity() {
     private var livenessBridge: MediaPipeLivenessBridge? = null
     private var brightnessBridge: WindowBrightnessBridge? = null
     private var connectivityBridge: ConnectivityBridge? = null
+    private var deviceIdentityBridge: DeviceIdentityBridge? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -65,9 +70,26 @@ class MainActivity : FlutterActivity() {
                     result.error("navigation_runtime", error.message, null)
                 }
             }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, biometricShareChannelName)
+            .setMethodCallHandler { call, result ->
+                try {
+                    when (call.method) {
+                        "shareCsv" -> {
+                            val path = call.argument<String>("path")
+                                ?: throw IllegalArgumentException("Missing CSV path.")
+                            shareBiometricCsv(path)
+                            result.success(null)
+                        }
+                        else -> result.notImplemented()
+                    }
+                } catch (error: Exception) {
+                    result.error("biometric_share", error.message, null)
+                }
+            }
         livenessBridge = MediaPipeLivenessBridge(this, flutterEngine)
         brightnessBridge = WindowBrightnessBridge(this, flutterEngine)
         connectivityBridge = ConnectivityBridge(this, flutterEngine)
+        deviceIdentityBridge = DeviceIdentityBridge(flutterEngine)
     }
 
     private fun openDirections(latitude: Double, longitude: Double, label: String) {
@@ -84,6 +106,26 @@ class MainActivity : FlutterActivity() {
             )
             startActivity(Intent(Intent.ACTION_VIEW, webUrl))
         }
+    }
+
+    private fun shareBiometricCsv(path: String) {
+        val file = File(path).canonicalFile
+        val exportDirectory = File(cacheDir, "biometric_exports").canonicalFile
+        require(file.parentFile == exportDirectory && file.isFile) {
+            "CSV must be an app-created biometric export."
+        }
+        val uri = FileProvider.getUriForFile(
+            this,
+            "$packageName.biometric_test_files",
+            file,
+        )
+        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/csv"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            clipData = ClipData.newRawUri("AGILA biometric test data", uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivity(Intent.createChooser(sendIntent, "Export Biometric Test Data"))
     }
 
     private fun ensureSession(flutterEngine: FlutterEngine): OrtSession {
@@ -160,6 +202,7 @@ class MainActivity : FlutterActivity() {
         brightnessBridge = null
         connectivityBridge?.shutdown()
         connectivityBridge = null
+        deviceIdentityBridge = null
         livenessBridge?.shutdown()
         livenessBridge = null
         session?.close()

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -65,16 +68,66 @@ def create_driver(client: TestClient, employee_id: str = "TEST-DRV-001") -> dict
     return response.json()
 
 
+def device_proof(
+    client: TestClient,
+    login_id: str,
+    purpose: str,
+    private_key: ec.EllipticCurvePrivateKey | None = None,
+) -> tuple[dict[str, str], ec.EllipticCurvePrivateKey]:
+    key = private_key or ec.generate_private_key(ec.SECP256R1())
+    challenge_response = client.post(
+        "/api/driver/auth/device-challenge",
+        json={"login_id": login_id, "purpose": purpose},
+    )
+    assert challenge_response.status_code == 200
+    challenge = challenge_response.json()["challenge"]
+    public_key = base64.b64encode(
+        key.public_key().public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    ).decode("ascii")
+    signature = base64.b64encode(
+        key.sign(challenge.encode("utf-8"), ec.ECDSA(hashes.SHA256()))
+    ).decode("ascii")
+    return (
+        {
+            "device_public_key": public_key,
+            "device_challenge": challenge,
+            "device_signature": signature,
+            "device_label": "Synthetic Android Device",
+        },
+        key,
+    )
+
+
 def activate_driver(
-    client: TestClient, created: dict, password: str = "Driver-Test-Password-1!"
+    client: TestClient,
+    created: dict,
+    password: str = "Driver-Test-Password-1!",
+    *,
+    complete_enrollment: bool = True,
 ) -> dict:
+    employee_id = created["driver"]["employee_id"]
+    proof, key = device_proof(client, employee_id, "activate")
     response = client.post(
         "/api/driver/activate",
         json={
-            "employee_id": created["driver"]["employee_id"],
+            "employee_id": employee_id,
             "activation_code": created["activation_code"],
             "password": password,
+            **proof,
         },
     )
     assert response.status_code == 200
-    return response.json()
+    result = response.json()
+    result["_device_private_key"] = key
+    result["_device_public_key"] = proof["device_public_key"]
+    result["_login_id"] = employee_id
+    if complete_enrollment:
+        completed = client.post(
+            "/api/driver/device/enrollment-complete",
+            headers={"Authorization": f"Bearer {result['access_token']}"},
+        )
+        assert completed.status_code == 200
+    return result

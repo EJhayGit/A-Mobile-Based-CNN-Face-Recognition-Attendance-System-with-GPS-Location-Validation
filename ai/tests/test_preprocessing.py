@@ -111,16 +111,11 @@ def test_alignment_and_recognition_tensor_contract() -> None:
     assert tensor.shape == (3, 224, 224)
     assert tensor.dtype == np.float32
     assert tensor.flags.c_contiguous
-    np.testing.assert_allclose(
-        tensor[:, 112, 112],
-        [
-            (1.0 - 0.485) / 0.229,
-            (0.0 - 0.456) / 0.224,
-            (0.0 - 0.406) / 0.225,
-        ],
-        rtol=1e-6,
-        atol=1e-6,
-    )
+    np.testing.assert_allclose(tensor[:, 112, 112], [
+        (1.0 - 0.485) / 0.229,
+        (0.0 - 0.456) / 0.224,
+        (0.0 - 0.406) / 0.225,
+    ], rtol=1e-6, atol=1e-6)
 
 
 def test_full_pipeline_uses_one_shared_contract() -> None:
@@ -128,7 +123,9 @@ def test_full_pipeline_uses_one_shared_contract() -> None:
         FakeYuNetBackend(_face_row()[np.newaxis, :]),
         confidence_threshold=0.9,
     )
-    result = FacePreprocessor(detector).process(np.zeros((224, 224, 3), dtype=np.uint8))
+    result = FacePreprocessor(detector).process(
+        np.zeros((224, 224, 3), dtype=np.uint8)
+    )
 
     assert result.aligned_bgr.shape == (224, 224, 3)
     assert result.recognition_chw.shape == (3, 224, 224)

@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import 'biometric_testing.dart';
 import 'domain.dart';
 
 abstract interface class AttendanceStorage {
@@ -9,13 +10,21 @@ abstract interface class AttendanceStorage {
   Future<void> writeQueue(List<AttendanceAttempt> queue);
 }
 
-class SecureAttendanceStorage implements AttendanceStorage {
+abstract interface class BiometricRecordStore {
+  Future<List<BiometricTrialRecord>> readBiometricRecords();
+  Future<void> appendBiometricRecord(BiometricTrialRecord record);
+  Future<void> clearBiometricRecords();
+}
+
+class SecureAttendanceStorage
+    implements AttendanceStorage, BiometricRecordStore {
   SecureAttendanceStorage({FlutterSecureStorage? storage})
     : _storage = storage ?? const FlutterSecureStorage();
 
   // MerLens V2 embeddings are incompatible with previously enrolled Model V1
   // templates, so the new model receives a fresh secure-storage namespace.
-  static const _templateKey = 'face_embedding_template_merlens_v2';
+  static const _legacyTemplateKey = 'face_embedding_template_merlens_v2';
+  static const _templatesKey = 'face_embedding_templates_by_driver_merlens_v2';
   static const _siteKey = 'authorized_site_v1';
   static const _queueKey = 'attendance_queue_v1';
   static const _endpointKey = 'sync_endpoint_v1';
@@ -25,19 +34,61 @@ class SecureAttendanceStorage implements AttendanceStorage {
   static const _assignmentKey = 'driver_assignment_v1';
   static const _debugModeKey = 'debug_mode_v1';
   static const _lastSyncedAtKey = 'last_synced_at_v1';
+  static const _biometricRecordsKey = 'biometric_test_records_v1';
+  static const _pendingFaceApprovalConsumptionKey =
+      'pending_face_approval_consumption_driver_v1';
+  static const _pendingDeviceEnrollmentCompletionKey =
+      'pending_device_enrollment_completion_driver_v1';
 
   final FlutterSecureStorage _storage;
 
-  Future<void> saveTemplate(List<double> template) =>
-      _storage.write(key: _templateKey, value: jsonEncode(template));
+  Future<void> saveTemplate(String driverId, List<double> template) async {
+    final accountId = _validatedDriverId(driverId);
+    normalizeEmbedding(template);
+    final templates = await _readTemplates();
+    templates[accountId] = template;
+    await _storage.write(key: _templatesKey, value: jsonEncode(templates));
+    await _storage.delete(key: _legacyTemplateKey);
+  }
 
-  Future<List<double>?> readTemplate() async {
-    final raw = await _storage.read(key: _templateKey);
-    if (raw == null) return null;
-    return (jsonDecode(raw) as List)
-        .cast<num>()
-        .map((value) => value.toDouble())
-        .toList();
+  Future<List<double>?> readTemplate(String driverId) async {
+    final accountId = _validatedDriverId(driverId);
+    final raw = (await _readTemplates())[accountId];
+    if (raw is! List) return null;
+    try {
+      final template = raw
+          .cast<num>()
+          .map((value) => value.toDouble())
+          .toList();
+      normalizeEmbedding(template);
+      return template;
+    } on Object {
+      return null;
+    }
+  }
+
+  Future<void> deleteTemplate(String driverId) async {
+    final accountId = _validatedDriverId(driverId);
+    final templates = await _readTemplates();
+    if (templates.remove(accountId) != null) {
+      await _storage.write(key: _templatesKey, value: jsonEncode(templates));
+    }
+  }
+
+  String _validatedDriverId(String driverId) {
+    final value = driverId.trim();
+    if (value.isEmpty) throw ArgumentError.value(driverId, 'driverId');
+    return value;
+  }
+
+  Future<Map<String, dynamic>> _readTemplates() async {
+    final raw = await _storage.read(key: _templatesKey);
+    if (raw == null) return {};
+    try {
+      return Map<String, dynamic>.from(jsonDecode(raw) as Map);
+    } on Object {
+      return {};
+    }
   }
 
   Future<void> saveSite(AuthorizedSite site) =>
@@ -72,12 +123,14 @@ class SecureAttendanceStorage implements AttendanceStorage {
     required String id,
     required String employeeId,
     required String fullName,
+    required String deviceAuthorizationStatus,
   }) => _storage.write(
     key: _driverProfileKey,
     value: jsonEncode({
       'id': id,
       'employee_id': employeeId,
       'full_name': fullName,
+      'device_authorization_status': deviceAuthorizationStatus,
     }),
   );
 
@@ -106,6 +159,30 @@ class SecureAttendanceStorage implements AttendanceStorage {
     await _storage.delete(key: _assignmentKey);
   }
 
+  Future<void> savePendingFaceApprovalConsumption(String driverId) =>
+      _storage.write(
+        key: _pendingFaceApprovalConsumptionKey,
+        value: _validatedDriverId(driverId),
+      );
+
+  Future<String?> readPendingFaceApprovalConsumption() =>
+      _storage.read(key: _pendingFaceApprovalConsumptionKey);
+
+  Future<void> clearPendingFaceApprovalConsumption() =>
+      _storage.delete(key: _pendingFaceApprovalConsumptionKey);
+
+  Future<void> savePendingDeviceEnrollmentCompletion(String driverId) =>
+      _storage.write(
+        key: _pendingDeviceEnrollmentCompletionKey,
+        value: _validatedDriverId(driverId),
+      );
+
+  Future<String?> readPendingDeviceEnrollmentCompletion() =>
+      _storage.read(key: _pendingDeviceEnrollmentCompletionKey);
+
+  Future<void> clearPendingDeviceEnrollmentCompletion() =>
+      _storage.delete(key: _pendingDeviceEnrollmentCompletionKey);
+
   Future<void> saveDebugMode(bool enabled) =>
       _storage.write(key: _debugModeKey, value: enabled ? 'true' : 'false');
 
@@ -121,6 +198,24 @@ class SecureAttendanceStorage implements AttendanceStorage {
     final raw = await _storage.read(key: _lastSyncedAtKey);
     return raw == null ? null : DateTime.tryParse(raw)?.toLocal();
   }
+
+  @override
+  Future<List<BiometricTrialRecord>> readBiometricRecords() async =>
+      decodeBiometricRecords(await _storage.read(key: _biometricRecordsKey));
+
+  @override
+  Future<void> appendBiometricRecord(BiometricTrialRecord record) async {
+    final records = await readBiometricRecords();
+    records.add(record);
+    await _storage.write(
+      key: _biometricRecordsKey,
+      value: encodeBiometricRecords(records),
+    );
+  }
+
+  @override
+  Future<void> clearBiometricRecords() =>
+      _storage.delete(key: _biometricRecordsKey);
 
   @override
   Future<List<AttendanceAttempt>> readQueue() async {

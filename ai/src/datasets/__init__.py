@@ -1,1 +1,1 @@
-"""Dataset inventory and loading contracts used by MerLens V2."""
+"""Dataset inventory and loading contracts for the approved thesis data."""

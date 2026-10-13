@@ -7,8 +7,20 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from backend.main import create_app
-from backend.models import Account, AuthSession, DeliveryAssignment, DeliveryLocation
-from backend.tests.conftest import activate_driver, create_driver, csrf, manager_login
+from backend.models import (
+    Account,
+    AuthSession,
+    DeliveryAssignment,
+    DeliveryLocation,
+    DeliveryRouteStop,
+)
+from backend.tests.conftest import (
+    activate_driver,
+    create_driver,
+    csrf,
+    device_proof,
+    manager_login,
+)
 
 
 def create_location(
@@ -108,6 +120,8 @@ def test_active_assignment_listing_detail_and_driver_integration(client: TestCli
         driver_me.json()["driver"]["current_assignment"]["location"]["radius_meters"]
         == 100
     )
+    assert driver_me.json()["driver"]["current_assignment"]["total_stop_count"] == 1
+    assert len(driver_me.json()["driver"]["current_assignment"]["stops"]) == 1
 
 
 def test_disabled_location_and_disabled_driver_assignment_rejected(
@@ -160,15 +174,16 @@ def test_one_active_assignment_status_transitions_and_summary(client: TestClient
         headers=csrf(client),
         json={"status": "completed"},
     )
-    assert completed.json()["assignment"]["completed_at"] is not None
-    invalid = client.patch(
+    assert completed.status_code == 409
+    assert "every route stop" in completed.json()["detail"]
+    cancelled = client.patch(
         f"/api/manager/deliveries/{assignment['id']}",
         headers=csrf(client),
-        json={"status": "assigned"},
+        json={"status": "cancelled"},
     )
-    assert invalid.status_code == 409
+    assert cancelled.json()["assignment"]["status"] == "cancelled"
     overview = client.get("/api/manager/overview").json()
-    assert overview["completed_today"] == 1
+    assert overview["completed_today"] == 0
     assert overview["in_progress_deliveries"] == 0
 
 
@@ -188,11 +203,124 @@ def test_cancelled_history_allows_new_assignment(client: TestClient):
     assert client.get("/api/manager/deliveries").json()["count"] == 2
 
 
+def test_multi_stop_route_create_reorder_lock_and_cancel(client: TestClient, factory):
+    first = create_location(client, "First Stop")
+    second = create_location(client, "Second Stop")
+    driver = active_driver(client, "TEST-DRV-MULTI-STOPS")
+    created = client.post(
+        "/api/manager/deliveries",
+        headers=csrf(client),
+        json={
+            "driver_id": driver["id"],
+            "route_name": "North AM-01",
+            "stops": [
+                {"delivery_location_id": first["id"]},
+                {"delivery_location_id": second["id"]},
+            ],
+        },
+    )
+    assert created.status_code == 201
+    route = created.json()["assignment"]
+    assert route["route_name"] == "North AM-01"
+    assert [stop["location"]["id"] for stop in route["stops"]] == [
+        first["id"],
+        second["id"],
+    ]
+    assert [stop["state"] for stop in route["stops"]] == ["current", "upcoming"]
+    assert route["location"]["id"] == first["id"]
+    assert route["completed_stop_count"] == 0
+    assert route["total_stop_count"] == 2
+
+    reordered = client.put(
+        f"/api/manager/deliveries/{route['id']}/stops",
+        headers=csrf(client),
+        json={
+            "stops": [
+                {"delivery_location_id": second["id"]},
+                {"delivery_location_id": first["id"]},
+            ]
+        },
+    )
+    assert reordered.status_code == 200
+    reordered_route = reordered.json()["assignment"]
+    assert [stop["location"]["id"] for stop in reordered_route["stops"]] == [
+        second["id"],
+        first["id"],
+    ]
+    assert reordered_route["location"]["id"] == second["id"]
+    with factory() as db:
+        assert (
+            db.scalar(
+                select(func.count(DeliveryRouteStop.id)).where(
+                    DeliveryRouteStop.delivery_assignment_id == route["id"]
+                )
+            )
+            == 4
+        )
+
+    started = client.patch(
+        f"/api/manager/deliveries/{route['id']}",
+        headers=csrf(client),
+        json={"status": "in_progress"},
+    )
+    assert started.status_code == 200
+    locked = client.put(
+        f"/api/manager/deliveries/{route['id']}/stops",
+        headers=csrf(client),
+        json={"stops": [{"delivery_location_id": first["id"]}]},
+    )
+    assert locked.status_code == 409
+    cancelled = client.patch(
+        f"/api/manager/deliveries/{route['id']}",
+        headers=csrf(client),
+        json={"status": "cancelled"},
+    ).json()["assignment"]
+    assert cancelled["status"] == "cancelled"
+    assert [stop["location"]["id"] for stop in cancelled["stops"]] == [
+        second["id"],
+        first["id"],
+    ]
+    assert [stop["state"] for stop in cancelled["stops"]] == [
+        "cancelled",
+        "cancelled",
+    ]
+
+
+def test_pre_migration_assignment_serializes_as_one_legacy_stop(
+    client: TestClient, factory
+):
+    location = create_location(client, "Legacy Destination")
+    driver = active_driver(client, "TEST-DRV-LEGACY-ROUTE")
+    with factory() as db:
+        manager = db.scalar(select(Account).where(Account.role == "fleet_manager"))
+        assert manager is not None
+        legacy = DeliveryAssignment(
+            driver_account_id=driver["id"],
+            delivery_location_id=location["id"],
+            assigned_by_manager_id=manager.id,
+            notes="Inserted without a stop to simulate a pre-migration row",
+        )
+        db.add(legacy)
+        db.commit()
+        legacy_id = legacy.id
+
+    detail = client.get(f"/api/manager/deliveries/{legacy_id}")
+    assert detail.status_code == 200
+    route = detail.json()["assignment"]
+    assert route["location"]["id"] == location["id"]
+    assert route["total_stop_count"] == 1
+    assert route["completed_stop_count"] == 0
+    assert route["stops"][0]["id"] is None
+    assert route["stops"][0]["state"] == "current"
+
+
 def test_driver_and_location_soft_delete_require_cancel_and_preserve_history(
     client: TestClient, factory
 ):
     location = create_location(client)
-    driver = active_driver(client)
+    created = create_driver(client, "TEST-DRV-SOFT-DELETE")
+    tokens = activate_driver(client, created)
+    driver = created["driver"]
     assignment = create_assignment(client, driver, location)
 
     driver_active = client.delete(
@@ -223,6 +351,57 @@ def test_driver_and_location_soft_delete_require_cancel_and_preserve_history(
     assert location_delete.status_code == 200
     assert client.get("/api/manager/drivers").json()["count"] == 0
     assert client.get("/api/manager/locations").json()["count"] == 0
+    bearer = {"Authorization": f"Bearer {tokens['access_token']}"}
+    assert client.get("/api/driver/me", headers=bearer).status_code == 401
+    proof, _ = device_proof(
+        client,
+        "TEST-DRV-SOFT-DELETE",
+        "login",
+        tokens["_device_private_key"],
+    )
+    assert (
+        client.post(
+            "/api/driver/auth/login",
+            json={
+                "login_id": "TEST-DRV-SOFT-DELETE",
+                "password": "Driver-Test-Password-1!",
+                **proof,
+            },
+        ).status_code
+        == 401
+    )
+    assert (
+        client.post(
+            "/api/manager/deliveries",
+            headers=csrf(client),
+            json={
+                "driver_id": driver["id"],
+                "delivery_location_id": location["id"],
+            },
+        ).status_code
+        == 404
+    )
+    attendance = {
+        "client_attempt_id": "deleted-driver-attempt",
+        "driver_id": driver["id"],
+        "site_id": location["id"],
+        "captured_at_utc": datetime.now(timezone.utc).isoformat(),
+        "latitude": 14.6760,
+        "longitude": 121.0437,
+        "gps_accuracy_meters": 5.0,
+        "distance_meters": 0.0,
+        "face_score": 0.9,
+        "face_verified": True,
+        "gps_verified": True,
+    }
+    assert (
+        client.post(
+            "/attendance/sync",
+            headers={**bearer, "Idempotency-Key": "deleted-driver-attempt"},
+            json=attendance,
+        ).status_code
+        == 401
+    )
     history = client.get(f"/api/manager/deliveries/{assignment['id']}")
     assert history.status_code == 200
     assert history.json()["assignment"]["status"] == "cancelled"
@@ -233,12 +412,15 @@ def test_driver_and_location_soft_delete_require_cancel_and_preserve_history(
         assert stored_driver is not None and stored_driver.deleted_at is not None
         assert stored_location is not None and stored_location.deleted_at is not None
         assert stored_assignment is not None
-        assert db.scalar(
-            select(func.count(AuthSession.id)).where(
-                AuthSession.account_id == driver["id"],
-                AuthSession.revoked_at.is_(None),
+        assert (
+            db.scalar(
+                select(func.count(AuthSession.id)).where(
+                    AuthSession.account_id == driver["id"],
+                    AuthSession.revoked_at.is_(None),
+                )
             )
-        ) == 0
+            == 0
+        )
 
 
 def test_unused_location_can_be_soft_deleted(client: TestClient, factory):
@@ -330,3 +512,19 @@ def test_delivery_filters_and_migration_security(client: TestClient):
     assert "grant delete" not in soft_delete_sql
     assert "security definer" not in soft_delete_sql
     assert "drop " not in soft_delete_sql
+    multi_stop_sql = (
+        Path("supabase/migrations/20260821090000_multi_dropoff_routes.sql")
+        .read_text(encoding="utf-8")
+        .lower()
+    )
+    for required in (
+        "create table public.delivery_route_stops",
+        "delivery_route_stops_active_order_key",
+        "select\n  id,\n  delivery_location_id,\n  1",
+        "enable row level security",
+        "delivery_route_stops_backend_policy",
+    ):
+        assert required in multi_stop_sql
+    assert "grant delete" not in multi_stop_sql
+    assert "delete from" not in multi_stop_sql
+    assert "drop " not in multi_stop_sql

@@ -6,7 +6,7 @@ import hmac
 import math
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -19,7 +19,10 @@ from backend.models import (
     AuthSession,
     DeliveryAssignment,
     DeliveryLocation,
+    DeliveryRouteStop,
+    DeviceReplacementRequest,
     DriverProfile,
+    FaceReregistrationRequest,
     utcnow,
 )
 from backend.schemas import (
@@ -27,6 +30,7 @@ from backend.schemas import (
     DeliveryAssignmentCreateRequest,
     DeliveryLocationCreateRequest,
     DeliveryLocationUpdateRequest,
+    DeliveryRouteStopsUpdateRequest,
     DriverCreateRequest,
 )
 from backend.security import (
@@ -134,7 +138,11 @@ def authenticate(db: Session, login_id: str, password: str, role: str) -> Accoun
 
 
 def create_session_tokens(
-    db: Session, account: Account, settings: Settings, device_label: str | None
+    db: Session,
+    account: Account,
+    settings: Settings,
+    device_label: str | None,
+    device_fingerprint: str | None = None,
 ) -> dict[str, object]:
     raw_refresh = generate_refresh_token()
     session = AuthSession(
@@ -142,6 +150,7 @@ def create_session_tokens(
         refresh_token_hash=refresh_hash(raw_refresh),
         expires_at=utcnow() + timedelta(hours=settings.refresh_hours),
         device_label=device_label,
+        device_fingerprint=device_fingerprint,
     )
     db.add(session)
     db.flush()
@@ -159,7 +168,11 @@ def create_session_tokens(
 
 
 def rotate_refresh(
-    db: Session, raw_refresh: str, settings: Settings, expected_role: str | None = None
+    db: Session,
+    raw_refresh: str,
+    settings: Settings,
+    expected_role: str | None = None,
+    device_fingerprint: str | None = None,
 ) -> tuple[Account, dict[str, object]]:
     digest = refresh_hash(raw_refresh)
     session = db.scalar(
@@ -180,9 +193,28 @@ def rotate_refresh(
         or (expected_role and account.role != expected_role)
     ):
         raise AppError(401, "Session expired")
+    if account.role == "driver":
+        profile = db.get(DriverProfile, account.id)
+        if (
+            profile is None
+            or not profile.authorized_device_fingerprint
+            or not device_fingerprint
+            or not hmac.compare_digest(
+                profile.authorized_device_fingerprint, device_fingerprint
+            )
+            or not session.device_fingerprint
+            or not hmac.compare_digest(session.device_fingerprint, device_fingerprint)
+        ):
+            raise AppError(403, "This device is not authorized for this account")
     session.revoked_at = now
     session.last_used_at = now
-    tokens = create_session_tokens(db, account, settings, session.device_label)
+    tokens = create_session_tokens(
+        db,
+        account,
+        settings,
+        session.device_label,
+        device_fingerprint=session.device_fingerprint,
+    )
     return account, tokens
 
 
@@ -249,6 +281,10 @@ def activate_driver(
     code: str,
     password: str,
     settings: Settings,
+    *,
+    device_public_key: str,
+    device_fingerprint: str,
+    device_label: str | None,
 ) -> Account:
     account = db.scalar(
         select(Account)
@@ -289,19 +325,180 @@ def activate_driver(
     account.password_hash = hash_secret(password)
     account.password_changed_at = now
     account.status = "active"
+    profile = db.get(DriverProfile, account.id)
+    conflict = db.scalar(
+        select(DriverProfile).where(
+            DriverProfile.authorized_device_fingerprint == device_fingerprint,
+            DriverProfile.account_id != account.id,
+        )
+    )
+    if profile is None or conflict is not None:
+        raise AppError(409, "This device is already authorized for another account")
+    profile.authorized_device_public_key = device_public_key
+    profile.authorized_device_fingerprint = device_fingerprint
+    profile.authorized_device_label = device_label
+    profile.device_authorized_at = now
+    profile.device_authorized_by_manager_id = None
+    profile.device_face_enrolled_at = None
     audit(db, "account_activated", account.id, account.id)
+    audit(
+        db,
+        "device_authorized_on_activation",
+        account.id,
+        account.id,
+        {"device_fingerprint_prefix": device_fingerprint[:12]},
+    )
     db.commit()
     return account
 
 
-def get_drivers(db: Session, search: str | None, status: str | None) -> list[Account]:
-    query = (
-        select(Account)
-        .options(selectinload(Account.driver_profile))
-        .join(DriverProfile, DriverProfile.account_id == Account.id)
-        .where(Account.role == "driver", Account.deleted_at.is_(None))
-        .order_by(DriverProfile.full_name)
+def require_authorized_device(
+    db: Session, account: Account, public_key: str, fingerprint: str
+) -> DriverProfile:
+    profile = db.get(DriverProfile, account.id)
+    if (
+        profile is None
+        or not profile.authorized_device_public_key
+        or not profile.authorized_device_fingerprint
+        or not hmac.compare_digest(profile.authorized_device_public_key, public_key)
+        or not hmac.compare_digest(profile.authorized_device_fingerprint, fingerprint)
+    ):
+        raise AppError(403, "This device is not authorized for this account")
+    return profile
+
+
+def request_device_replacement(
+    db: Session,
+    account: Account,
+    *,
+    candidate_public_key: str,
+    candidate_fingerprint: str,
+    device_label: str | None,
+) -> DeviceReplacementRequest:
+    conflict = db.scalar(
+        select(DriverProfile).where(
+            DriverProfile.authorized_device_fingerprint == candidate_fingerprint,
+            DriverProfile.account_id != account.id,
+        )
     )
+    if conflict is not None:
+        raise AppError(409, "This device is already authorized for another account")
+    profile = db.get(DriverProfile, account.id)
+    if (
+        profile is not None
+        and profile.authorized_device_fingerprint
+        and hmac.compare_digest(
+            profile.authorized_device_fingerprint, candidate_fingerprint
+        )
+    ):
+        raise AppError(409, "This device is already authorized")
+    item = db.scalar(
+        select(DeviceReplacementRequest).where(
+            DeviceReplacementRequest.driver_account_id == account.id
+        )
+    )
+    if item is not None and item.status == "pending":
+        raise AppError(409, "A device replacement request is already pending")
+    if item is None:
+        item = DeviceReplacementRequest(
+            driver_account_id=account.id,
+            candidate_public_key=candidate_public_key,
+            candidate_fingerprint=candidate_fingerprint,
+            candidate_device_label=device_label,
+        )
+        db.add(item)
+    else:
+        item.candidate_public_key = candidate_public_key
+        item.candidate_fingerprint = candidate_fingerprint
+        item.candidate_device_label = device_label
+        item.status = "pending"
+        item.requested_at = utcnow()
+        item.decided_at = None
+        item.decided_by_manager_id = None
+    audit(
+        db,
+        "device_replacement_requested",
+        account.id,
+        account.id,
+        {"device_fingerprint_prefix": candidate_fingerprint[:12]},
+    )
+    db.commit()
+    return item
+
+
+def decide_device_replacement(
+    db: Session,
+    manager: Account,
+    item: DeviceReplacementRequest,
+    decision: str,
+) -> DeviceReplacementRequest:
+    if item.status != "pending":
+        raise AppError(409, "Device replacement request is no longer pending")
+    now = utcnow()
+    item.status = "approved" if decision == "approve" else "rejected"
+    item.decided_at = now
+    item.decided_by_manager_id = manager.id
+    if decision == "approve":
+        profile = db.scalar(
+            select(DriverProfile)
+            .where(DriverProfile.account_id == item.driver_account_id)
+            .with_for_update()
+        )
+        if profile is None:
+            raise AppError(404, "Field Personnel not found")
+        conflict = db.scalar(
+            select(DriverProfile).where(
+                DriverProfile.authorized_device_fingerprint
+                == item.candidate_fingerprint,
+                DriverProfile.account_id != item.driver_account_id,
+            )
+        )
+        if conflict is not None:
+            raise AppError(409, "This device is already authorized for another account")
+        profile.authorized_device_public_key = item.candidate_public_key
+        profile.authorized_device_fingerprint = item.candidate_fingerprint
+        profile.authorized_device_label = item.candidate_device_label
+        profile.device_authorized_at = now
+        profile.device_authorized_by_manager_id = manager.id
+        profile.device_face_enrolled_at = None
+        revoke_sessions(db, item.driver_account_id)
+        face_request = db.scalar(
+            select(FaceReregistrationRequest).where(
+                FaceReregistrationRequest.driver_account_id == item.driver_account_id
+            )
+        )
+        if face_request is not None and face_request.status in {"pending", "approved"}:
+            face_request.status = "rejected"
+            face_request.decided_at = now
+            face_request.decided_by_manager_id = manager.id
+            audit(
+                db,
+                "face_reregistration_invalidated_by_device_replacement",
+                item.driver_account_id,
+                manager.id,
+            )
+    audit(
+        db,
+        f"device_replacement_{item.status}",
+        item.driver_account_id,
+        manager.id,
+        {"device_fingerprint_prefix": item.candidate_fingerprint[:12]},
+    )
+    db.commit()
+    return item
+
+
+def complete_device_face_enrollment(db: Session, account: Account) -> None:
+    profile = db.get(DriverProfile, account.id)
+    if profile is None or not profile.authorized_device_fingerprint:
+        raise AppError(403, "This device is not authorized for this account")
+    if profile.device_face_enrolled_at is None:
+        profile.device_face_enrolled_at = utcnow()
+        audit(db, "device_face_enrollment_completed", account.id, account.id)
+        db.commit()
+
+
+def _driver_filters(query, search: str | None, status: str | None):
     if search:
         term = f"%{search.strip()}%"
         query = query.where(
@@ -312,6 +509,44 @@ def get_drivers(db: Session, search: str | None, status: str | None) -> list[Acc
         )
     if status:
         query = query.where(Account.status == status)
+    return query
+
+
+def count_drivers(db: Session, search: str | None, status: str | None) -> int:
+    query = (
+        select(func.count(Account.id))
+        .join(DriverProfile, DriverProfile.account_id == Account.id)
+        .where(Account.role == "driver", Account.deleted_at.is_(None))
+    )
+    return int(db.scalar(_driver_filters(query, search, status)) or 0)
+
+
+def get_drivers(
+    db: Session,
+    search: str | None,
+    status: str | None,
+    *,
+    offset: int = 0,
+    limit: int | None = None,
+    sort: str = "name_asc",
+) -> list[Account]:
+    query = (
+        select(Account)
+        .options(selectinload(Account.driver_profile))
+        .join(DriverProfile, DriverProfile.account_id == Account.id)
+        .where(Account.role == "driver", Account.deleted_at.is_(None))
+    )
+    query = _driver_filters(query, search, status)
+    ordering = {
+        "name_asc": (DriverProfile.full_name.asc(), Account.id.asc()),
+        "name_desc": (DriverProfile.full_name.desc(), Account.id.asc()),
+        "id_asc": (DriverProfile.employee_id.asc(), Account.id.asc()),
+        "created_desc": (Account.created_at.desc(), Account.id.asc()),
+        "status_asc": (Account.status.asc(), DriverProfile.full_name.asc()),
+    }
+    query = query.order_by(*ordering.get(sort, ordering["name_asc"])).offset(offset)
+    if limit is not None:
+        query = query.limit(limit)
     return list(db.scalars(query).unique())
 
 
@@ -326,7 +561,7 @@ def driver_account(db: Session, driver_id: str) -> Account:
         )
     )
     if account is None:
-        raise AppError(404, "Driver not found")
+        raise AppError(404, "Field Personnel not found")
     return account
 
 
@@ -363,7 +598,7 @@ def delete_driver(db: Session, manager: Account, driver: Account) -> None:
     if active_assignment:
         raise AppError(
             409,
-            "Cancel the Driver's active route before deleting this Driver.",
+            "Cancel the Field Personnel's active Site Assignment before deleting this Field Personnel.",
         )
     now = utcnow()
     driver.status = "disabled"
@@ -394,14 +629,35 @@ def change_password(db: Session, account: Account, current: str, new: str) -> No
     db.commit()
 
 
-def get_locations(db: Session, active: bool | None = None) -> list[DeliveryLocation]:
-    query = (
-        select(DeliveryLocation)
-        .where(DeliveryLocation.deleted_at.is_(None))
-        .order_by(DeliveryLocation.name)
+def count_locations(db: Session, active: bool | None = None) -> int:
+    query = select(func.count(DeliveryLocation.id)).where(
+        DeliveryLocation.deleted_at.is_(None)
     )
     if active is not None:
         query = query.where(DeliveryLocation.active == active)
+    return int(db.scalar(query) or 0)
+
+
+def get_locations(
+    db: Session,
+    active: bool | None = None,
+    *,
+    offset: int = 0,
+    limit: int | None = None,
+    sort: str = "name_asc",
+) -> list[DeliveryLocation]:
+    query = select(DeliveryLocation).where(DeliveryLocation.deleted_at.is_(None))
+    if active is not None:
+        query = query.where(DeliveryLocation.active == active)
+    ordering = {
+        "name_asc": (DeliveryLocation.name.asc(), DeliveryLocation.id.asc()),
+        "name_desc": (DeliveryLocation.name.desc(), DeliveryLocation.id.asc()),
+        "created_desc": (DeliveryLocation.created_at.desc(), DeliveryLocation.id.asc()),
+        "status_asc": (DeliveryLocation.active.desc(), DeliveryLocation.name.asc()),
+    }
+    query = query.order_by(*ordering.get(sort, ordering["name_asc"])).offset(offset)
+    if limit is not None:
+        query = query.limit(limit)
     return list(db.scalars(query))
 
 
@@ -410,7 +666,7 @@ def create_location(
 ) -> DeliveryLocation:
     name = request.name.strip()
     if not name:
-        raise AppError(400, "Location name is required")
+        raise AppError(400, "Site Location name is required")
     location = DeliveryLocation(
         name=name,
         address=request.address.strip() if request.address else None,
@@ -435,15 +691,15 @@ def update_location(
         )
     )
     if location is None:
-        raise AppError(404, "Delivery location not found")
+        raise AppError(404, "Site Location not found")
     changes = request.model_dump(exclude_unset=True)
     if not changes:
-        raise AppError(400, "No delivery location changes supplied")
+        raise AppError(400, "No Site Location changes supplied")
     for key, value in changes.items():
         if key in {"name", "address"} and isinstance(value, str):
             value = value.strip() or None
         if key == "name" and value is None:
-            raise AppError(400, "Location name is required")
+            raise AppError(400, "Site Location name is required")
         setattr(location, key, value)
     db.commit()
     return location
@@ -457,17 +713,28 @@ def delete_location(db: Session, location_id: str) -> None:
         )
     )
     if location is None:
-        raise AppError(404, "Delivery location not found")
+        raise AppError(404, "Site Location not found")
     active_assignment = db.scalar(
-        select(DeliveryAssignment.id).where(
-            DeliveryAssignment.delivery_location_id == location.id,
+        select(DeliveryAssignment.id)
+        .outerjoin(
+            DeliveryRouteStop,
+            DeliveryRouteStop.delivery_assignment_id == DeliveryAssignment.id,
+        )
+        .where(
             DeliveryAssignment.status.in_(("assigned", "in_progress")),
+            or_(
+                DeliveryAssignment.delivery_location_id == location.id,
+                (
+                    (DeliveryRouteStop.delivery_location_id == location.id)
+                    & DeliveryRouteStop.removed_at.is_(None)
+                ),
+            ),
         )
     )
     if active_assignment:
         raise AppError(
             409,
-            "Cancel the active route before deleting this Location.",
+            "Cancel the active Site Assignment before deleting this Site Location.",
         )
     now = utcnow()
     location.active = False
@@ -482,16 +749,15 @@ def get_assignments(
     status: str | None = None,
     start: datetime | None = None,
     end: datetime | None = None,
+    *,
+    offset: int = 0,
+    limit: int | None = None,
+    sort: str = "assigned_desc",
 ) -> list[DeliveryAssignment]:
-    query = (
-        select(DeliveryAssignment)
-        .options(
-            selectinload(DeliveryAssignment.driver).selectinload(
-                Account.driver_profile
-            ),
-            selectinload(DeliveryAssignment.location),
-        )
-        .order_by(DeliveryAssignment.assigned_at.desc())
+    query = select(DeliveryAssignment).options(
+        selectinload(DeliveryAssignment.driver).selectinload(Account.driver_profile),
+        selectinload(DeliveryAssignment.location),
+        selectinload(DeliveryAssignment.stops).selectinload(DeliveryRouteStop.location),
     )
     if driver_id:
         query = query.where(DeliveryAssignment.driver_account_id == driver_id)
@@ -499,7 +765,47 @@ def get_assignments(
         query = query.where(DeliveryAssignment.status == status)
     if start and end:
         query = query.where(DeliveryAssignment.assigned_at.between(start, end))
+    ordering = {
+        "assigned_desc": (
+            DeliveryAssignment.assigned_at.desc(),
+            DeliveryAssignment.id.asc(),
+        ),
+        "assigned_asc": (
+            DeliveryAssignment.assigned_at.asc(),
+            DeliveryAssignment.id.asc(),
+        ),
+        "scheduled_asc": (
+            DeliveryAssignment.scheduled_at.asc(),
+            DeliveryAssignment.id.asc(),
+        ),
+        "status_asc": (
+            DeliveryAssignment.status.asc(),
+            DeliveryAssignment.assigned_at.desc(),
+        ),
+    }
+    query = query.order_by(*ordering.get(sort, ordering["assigned_desc"])).offset(
+        offset
+    )
+    if limit is not None:
+        query = query.limit(limit)
     return list(db.scalars(query).unique())
+
+
+def count_assignments(
+    db: Session,
+    driver_id: str | None = None,
+    status: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+) -> int:
+    query = select(func.count(DeliveryAssignment.id))
+    if driver_id:
+        query = query.where(DeliveryAssignment.driver_account_id == driver_id)
+    if status:
+        query = query.where(DeliveryAssignment.status == status)
+    if start and end:
+        query = query.where(DeliveryAssignment.assigned_at.between(start, end))
+    return int(db.scalar(query) or 0)
 
 
 def assignment_detail(db: Session, assignment_id: str) -> DeliveryAssignment:
@@ -510,11 +816,14 @@ def assignment_detail(db: Session, assignment_id: str) -> DeliveryAssignment:
                 Account.driver_profile
             ),
             selectinload(DeliveryAssignment.location),
+            selectinload(DeliveryAssignment.stops).selectinload(
+                DeliveryRouteStop.location
+            ),
         )
         .where(DeliveryAssignment.id == assignment_id)
     )
     if assignment is None:
-        raise AppError(404, "Delivery assignment not found")
+        raise AppError(404, "Site Assignment not found")
     return assignment
 
 
@@ -528,6 +837,9 @@ def active_assignment_for_driver(
                 Account.driver_profile
             ),
             selectinload(DeliveryAssignment.location),
+            selectinload(DeliveryAssignment.stops).selectinload(
+                DeliveryRouteStop.location
+            ),
         )
         .where(
             DeliveryAssignment.driver_account_id == driver_id,
@@ -547,6 +859,9 @@ def latest_completed_assignment_for_driver(
                 Account.driver_profile
             ),
             selectinload(DeliveryAssignment.location),
+            selectinload(DeliveryAssignment.stops).selectinload(
+                DeliveryRouteStop.location
+            ),
         )
         .where(
             DeliveryAssignment.driver_account_id == driver_id,
@@ -563,17 +878,25 @@ def create_assignment(
 ) -> DeliveryAssignment:
     driver = driver_account(db, request.driver_id)
     if driver.status != "active":
-        raise AppError(409, "Only active Drivers can receive assignments")
-    location = db.scalar(
-        select(DeliveryLocation).where(
-            DeliveryLocation.id == request.delivery_location_id,
-            DeliveryLocation.deleted_at.is_(None),
+        raise AppError(409, "Only active Field Personnel can receive Site Assignments")
+    location_ids = (
+        [stop.delivery_location_id for stop in request.stops]
+        if request.stops
+        else [request.delivery_location_id]
+    )
+    locations = list(
+        db.scalars(
+            select(DeliveryLocation).where(
+                DeliveryLocation.id.in_(location_ids),
+                DeliveryLocation.deleted_at.is_(None),
+            )
         )
     )
-    if location is None:
-        raise AppError(404, "Delivery location not found")
-    if not location.active:
-        raise AppError(409, "Disabled Locations cannot receive assignments")
+    locations_by_id = {location.id: location for location in locations}
+    if any(location_id not in locations_by_id for location_id in location_ids):
+        raise AppError(404, "Site Location not found")
+    if any(not locations_by_id[location_id].active for location_id in location_ids):
+        raise AppError(409, "Disabled Site Locations cannot receive Site Assignments")
     existing = db.scalar(
         select(DeliveryAssignment.id).where(
             DeliveryAssignment.driver_account_id == driver.id,
@@ -581,30 +904,96 @@ def create_assignment(
         )
     )
     if existing:
-        raise AppError(409, "Driver already has an active delivery assignment")
+        raise AppError(409, "Field Personnel already has an active Site Assignment")
     assignment = DeliveryAssignment(
         driver_account_id=driver.id,
-        delivery_location_id=location.id,
+        delivery_location_id=location_ids[0],
         assigned_by_manager_id=manager.id,
         scheduled_at=request.scheduled_at,
+        route_name=request.route_name.strip() if request.route_name else None,
         notes=request.notes.strip() if request.notes else None,
     )
     db.add(assignment)
     try:
         db.flush()
+        for stop_order, location_id in enumerate(location_ids, start=1):
+            db.add(
+                DeliveryRouteStop(
+                    delivery_assignment_id=assignment.id,
+                    delivery_location_id=location_id,
+                    stop_order=stop_order,
+                )
+            )
         audit(
             db,
             "delivery_assigned",
             driver.id,
             manager.id,
-            {"assignment_id": assignment.id, "location_id": location.id},
+            {
+                "assignment_id": assignment.id,
+                "location_id": location_ids[0],
+                "stop_count": len(location_ids),
+            },
         )
         db.commit()
     except IntegrityError as error:
         db.rollback()
         raise AppError(
-            409, "Driver already has an active delivery assignment"
+            409, "Field Personnel already has an active Site Assignment"
         ) from error
+    return assignment_detail(db, assignment.id)
+
+
+def update_assignment_stops(
+    db: Session,
+    manager: Account,
+    assignment_id: str,
+    request: DeliveryRouteStopsUpdateRequest,
+) -> DeliveryAssignment:
+    assignment = assignment_detail(db, assignment_id)
+    active_stops = [stop for stop in assignment.stops if stop.removed_at is None]
+    if assignment.status != "assigned" or any(
+        stop.completed_at is not None for stop in active_stops
+    ):
+        raise AppError(409, "Route stops can only be edited before the route starts")
+    location_ids = [stop.delivery_location_id for stop in request.stops]
+    locations = list(
+        db.scalars(
+            select(DeliveryLocation).where(
+                DeliveryLocation.id.in_(location_ids),
+                DeliveryLocation.deleted_at.is_(None),
+            )
+        )
+    )
+    locations_by_id = {location.id: location for location in locations}
+    if any(location_id not in locations_by_id for location_id in location_ids):
+        raise AppError(404, "Site Location not found")
+    if any(not locations_by_id[location_id].active for location_id in location_ids):
+        raise AppError(409, "Disabled Site Locations cannot receive Site Assignments")
+    now = utcnow()
+    for stop in active_stops:
+        stop.removed_at = now
+        stop.updated_at = now
+    db.flush()
+    for stop_order, location_id in enumerate(location_ids, start=1):
+        db.add(
+            DeliveryRouteStop(
+                delivery_assignment_id=assignment.id,
+                delivery_location_id=location_id,
+                stop_order=stop_order,
+            )
+        )
+    assignment.delivery_location_id = location_ids[0]
+    assignment.updated_at = now
+    audit(
+        db,
+        "delivery_stops_updated",
+        assignment.driver_account_id,
+        manager.id,
+        {"assignment_id": assignment.id, "stop_count": len(location_ids)},
+    )
+    db.commit()
+    db.expire_all()
     return assignment_detail(db, assignment.id)
 
 
@@ -616,7 +1005,7 @@ def update_assignment_status(
 ) -> DeliveryAssignment:
     assignment = assignment_detail(db, assignment_id)
     allowed = {
-        "assigned": {"in_progress", "completed", "cancelled"},
+        "assigned": {"in_progress", "cancelled"},
         "in_progress": {"completed", "cancelled"},
         "completed": set(),
         "cancelled": set(),
@@ -624,7 +1013,12 @@ def update_assignment_status(
     if status == assignment.status:
         return assignment
     if status not in allowed[assignment.status]:
-        raise AppError(409, "Invalid delivery status transition")
+        raise AppError(409, "Invalid Site Assignment status transition")
+    active_stops = [stop for stop in assignment.stops if stop.removed_at is None]
+    if status == "completed" and (
+        not active_stops or any(stop.completed_at is None for stop in active_stops)
+    ):
+        raise AppError(409, "Complete every route stop before completing the route")
     assignment.status = status
     assignment.completed_at = utcnow() if status == "completed" else None
     assignment.updated_at = utcnow()
@@ -643,6 +1037,8 @@ def store_attendance(
     db: Session, account: Account, payload: AttendanceUpload, settings: Settings
 ) -> tuple[AttendanceRecord, bool]:
     profile = db.get(DriverProfile, account.id)
+    if profile is None or profile.device_face_enrolled_at is None:
+        raise AppError(403, "Face setup is required on the authorized device")
     allowed_driver_ids = {account.id, profile.employee_id, "local-development-driver"}
     if payload.driver_id not in allowed_driver_ids:
         raise AppError(403, "Invalid attendance record")
@@ -683,21 +1079,35 @@ def store_attendance(
         return existing, False
     assignment = db.scalar(
         select(DeliveryAssignment)
-        .options(selectinload(DeliveryAssignment.location))
+        .options(
+            selectinload(DeliveryAssignment.location),
+            selectinload(DeliveryAssignment.stops).selectinload(
+                DeliveryRouteStop.location
+            ),
+        )
         .where(
             DeliveryAssignment.driver_account_id == account.id,
-            DeliveryAssignment.delivery_location_id == payload.site_id,
             DeliveryAssignment.assigned_at <= captured,
-            or_(
-                DeliveryAssignment.status.in_(("assigned", "in_progress")),
-                DeliveryAssignment.updated_at >= captured,
-            ),
+            DeliveryAssignment.status.in_(("assigned", "in_progress")),
         )
         .order_by(DeliveryAssignment.assigned_at.desc())
         .with_for_update()
     )
     if assignment is None:
-        raise AppError(400, "Attendance is not for an assigned location")
+        raise AppError(400, "Attendance is not for an active Site Assignment")
+    if payload.assignment_id and payload.assignment_id != assignment.id:
+        raise AppError(400, "Attendance is not for the current Site Assignment")
+    active_stops = [stop for stop in assignment.stops if stop.removed_at is None]
+    current_stop = next(
+        (stop for stop in active_stops if stop.completed_at is None), None
+    )
+    current_location = current_stop.location if current_stop else assignment.location
+    if payload.route_stop_id and (
+        current_stop is None or payload.route_stop_id != current_stop.id
+    ):
+        raise AppError(400, "Attendance is not for the current Site Assignment stop")
+    if current_location.id != payload.site_id:
+        raise AppError(400, "Attendance is not for the current Site Assignment stop")
     if not all(
         math.isfinite(value)
         for value in (
@@ -710,11 +1120,11 @@ def store_attendance(
     distance_meters = haversine_meters(
         payload.latitude,
         payload.longitude,
-        assignment.location.latitude,
-        assignment.location.longitude,
+        current_location.latitude,
+        current_location.longitude,
     )
-    if distance_meters > assignment.location.radius_meters:
-        raise AppError(400, "Driver is outside the attendance boundary")
+    if distance_meters > current_location.radius_meters:
+        raise AppError(400, "Field Personnel is outside the attendance boundary")
     record = AttendanceRecord(
         client_attempt_id=payload.client_attempt_id,
         driver_account_id=account.id,
@@ -731,15 +1141,31 @@ def store_attendance(
     )
     db.add(record)
     completed_at = utcnow()
-    assignment.status = "completed"
-    assignment.completed_at = completed_at
+    if current_stop:
+        current_stop.completed_at = completed_at
+        current_stop.updated_at = completed_at
+    has_pending_stop = any(
+        stop.completed_at is None and stop.id != getattr(current_stop, "id", None)
+        for stop in active_stops
+    )
+    assignment.status = "in_progress" if has_pending_stop else "completed"
+    assignment.completed_at = None if has_pending_stop else completed_at
     assignment.updated_at = completed_at
     audit(
         db,
-        "delivery_completed_by_attendance",
+        (
+            "delivery_stop_completed_by_attendance"
+            if has_pending_stop
+            else "delivery_completed_by_attendance"
+        ),
         account.id,
         account.id,
-        {"assignment_id": assignment.id},
+        {
+            "assignment_id": assignment.id,
+            "stop_id": current_stop.id if current_stop else None,
+            "stop_order": current_stop.stop_order if current_stop else 1,
+            "route_completed": not has_pending_stop,
+        },
     )
     try:
         db.commit()

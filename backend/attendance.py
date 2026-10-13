@@ -21,19 +21,25 @@ class AttendanceRecord:
     face_score: float
     face_verified: bool
     gps_verified: bool
+    assignment_id: str | None = None
+    route_stop_id: str | None = None
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> AttendanceRecord:
-        required = {field.name for field in cls.__dataclass_fields__.values()}
-        if set(payload) != required:
+        optional = {"assignment_id", "route_stop_id"}
+        allowed = {field.name for field in cls.__dataclass_fields__.values()}
+        required = allowed - optional
+        if not required.issubset(payload) or not set(payload).issubset(allowed):
             missing = sorted(required - set(payload))
-            extra = sorted(set(payload) - required)
+            extra = sorted(set(payload) - allowed)
             raise ValueError(
                 f"Invalid attendance fields; missing={missing}, extra={extra}."
             )
         record = cls(**payload)
         if not record.client_attempt_id or not record.driver_id or not record.site_id:
-            raise ValueError("Attempt, driver, and site identifiers must be non-empty.")
+            raise ValueError(
+                "Attempt, Field Personnel, and site identifiers must be non-empty."
+            )
         parsed_time = datetime.fromisoformat(
             record.captured_at_utc.replace("Z", "+00:00")
         )
@@ -64,4 +70,4 @@ class AttendanceRecord:
         return record
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return {key: value for key, value in asdict(self).items() if value is not None}

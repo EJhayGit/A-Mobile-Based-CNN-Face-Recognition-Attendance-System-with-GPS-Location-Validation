@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 from numpy.typing import NDArray
 
+
 FloatArray = NDArray[np.float32]
 UInt8Array = NDArray[np.uint8]
 

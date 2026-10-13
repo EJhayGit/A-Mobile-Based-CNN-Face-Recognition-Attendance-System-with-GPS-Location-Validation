@@ -2,20 +2,20 @@
 
 from __future__ import annotations
 
-import csv
-import tempfile
 from contextlib import contextmanager
+import csv
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
+import tempfile
 
 import cv2
 import numpy as np
 import pytest
 import torch
 
-from ai.src.datasets.aligned import AlignedFaceDataset
 from ai.src.datasets.digiface import DatasetIntegrityError
+from ai.src.datasets.aligned import AlignedFaceDataset
 from ai.src.datasets.manifest import (
     assert_identity_disjoint,
     read_source_manifest,
@@ -98,34 +98,45 @@ class _FakePreprocessor:
 def test_manifest_validation_and_identity_disjointness() -> None:
     with _workspace() as workspace:
         root, train_path = _write_source_partition(workspace, "train", 0, 2)
-        _, validation_path = _write_source_partition(workspace, "validation", 2, 1)
-        train = read_source_manifest(train_path, root, expected_partition="train")
+        _, validation_path = _write_source_partition(
+            workspace, "validation", 2, 1
+        )
+        train = read_source_manifest(
+            train_path, root, expected_partition="train"
+        )
         validation = read_source_manifest(
             validation_path, root, expected_partition="validation"
         )
 
-        assert assert_identity_disjoint({"train": train, "validation": validation}) == {
-            "train": 2,
-            "validation": 1,
-        }
+        assert assert_identity_disjoint(
+            {"train": train, "validation": validation}
+        ) == {"train": 2, "validation": 1}
 
 
 def test_identity_leakage_is_rejected() -> None:
     with _workspace() as workspace:
         root, train_path = _write_source_partition(workspace, "train", 0, 1)
-        _, validation_path = _write_source_partition(workspace, "validation", 0, 1)
-        train = read_source_manifest(train_path, root, expected_partition="train")
+        _, validation_path = _write_source_partition(
+            workspace, "validation", 0, 1
+        )
+        train = read_source_manifest(
+            train_path, root, expected_partition="train"
+        )
         validation = read_source_manifest(
             validation_path, root, expected_partition="validation"
         )
 
         with pytest.raises(DatasetIntegrityError, match="identity leakage"):
-            assert_identity_disjoint({"train": train, "validation": validation})
+            assert_identity_disjoint(
+                {"train": train, "validation": validation}
+            )
 
 
 def test_preprocess_records_success_and_safe_rejection() -> None:
     with _workspace() as workspace:
-        source_root, manifest = _write_source_partition(workspace, "train", 0, 1)
+        source_root, manifest = _write_source_partition(
+            workspace, "train", 0, 1
+        )
         output_manifest = workspace / "processed" / "train.csv"
 
         result = preprocess_partition(
@@ -152,7 +163,9 @@ def test_preprocess_records_success_and_safe_rejection() -> None:
 
 def test_aligned_dataset_filters_unusable_identities_and_returns_tensor() -> None:
     with _workspace() as workspace:
-        source_root, manifest = _write_source_partition(workspace, "train", 0, 2)
+        source_root, manifest = _write_source_partition(
+            workspace, "train", 0, 2
+        )
         output_root = workspace / "aligned"
         output_manifest = workspace / "processed" / "train.csv"
         preprocess_partition(

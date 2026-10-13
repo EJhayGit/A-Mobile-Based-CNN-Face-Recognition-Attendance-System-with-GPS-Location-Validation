@@ -77,32 +77,6 @@ class CameraFramePipelineResult {
   final List<double>? embedding;
 }
 
-class DirectImageDiagnostic {
-  const DirectImageDiagnostic({
-    required this.width,
-    required this.height,
-    required this.productionCount,
-    required this.confidence,
-    required this.boundingBox,
-    required this.landmarks,
-    required this.productionAccepted,
-    required this.maximumBoundingBoxDifference,
-    required this.maximumLandmarkDifference,
-    required this.materiallyMatchesPython,
-  });
-
-  final int width;
-  final int height;
-  final int productionCount;
-  final double? confidence;
-  final List<double>? boundingBox;
-  final List<Point2d>? landmarks;
-  final bool productionAccepted;
-  final double? maximumBoundingBoxDifference;
-  final double? maximumLandmarkDifference;
-  final bool materiallyMatchesPython;
-}
-
 class _DetectionRows {
   const _DetectionRows(this.rows);
 
@@ -139,25 +113,8 @@ class FacePipeline {
 
   static const detectorAsset =
       'assets/models/face_detection_yunet_2023mar.onnx';
-  static const directDiagnosticAsset =
-      'assets/diagnostics/yunet_validation.png';
   static const detectorThreshold = CameraFlowRules.productionThreshold;
   static const debugDetectorThreshold = CameraFlowRules.debugReportingThreshold;
-
-  static const _pythonExpectedConfidence = 0.939637363;
-  static const _pythonExpectedBoundingBox = <double>[
-    12.85451,
-    16.85219,
-    70.26987,
-    94.89157,
-  ];
-  static const _pythonExpectedLandmarks = <Point2d>[
-    Point2d(37.92093, 53.82532),
-    Point2d(70.91348, 54.51111),
-    Point2d(58.18481, 72.71135),
-    Point2d(38.24637, 86.89558),
-    Point2d(66.74966, 86.59547),
-  ];
 
   final EmbeddingRuntime _runtime;
   final CameraFrameConverter _converter;
@@ -329,68 +286,6 @@ class FacePipeline {
       debugFaces?.dispose();
       productionFaces?.dispose();
       image?.dispose();
-    }
-  }
-
-  Future<DirectImageDiagnostic> diagnoseDirectValidationAsset() async {
-    await initialize();
-    final data = await rootBundle.load(directDiagnosticAsset);
-    final temporaryDirectory = await getTemporaryDirectory();
-    final imageFile = File(
-      '${temporaryDirectory.path}${Platform.pathSeparator}yunet_direct_validation.png',
-    );
-    cv.Mat? image;
-    cv.Mat? productionFaces;
-    try {
-      await imageFile.writeAsBytes(
-        data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
-        flush: true,
-      );
-      image = cv.imread(imageFile.path);
-      if (image.isEmpty) {
-        throw StateError('Diagnostic image could not be decoded.');
-      }
-      final detector = _productionDetector!;
-      detector.setInputSize((image.cols, image.rows));
-      productionFaces = detector.detect(image);
-      final rows = _rows(productionFaces);
-      final highest = rows.highest;
-      final bbox = highest?.sublist(0, 4);
-      final landmarks = highest == null ? null : _landmarks(highest);
-      final confidence = highest?[14];
-      final bboxDifference = bbox == null
-          ? null
-          : _maximumDifference(bbox, _pythonExpectedBoundingBox);
-      final landmarkDifference = landmarks == null
-          ? null
-          : _maximumPointDifference(landmarks, _pythonExpectedLandmarks);
-      final matches =
-          rows.count == 1 &&
-          confidence != null &&
-          (confidence - _pythonExpectedConfidence).abs() <= 0.01 &&
-          bboxDifference != null &&
-          bboxDifference <= 1.0 &&
-          landmarkDifference != null &&
-          landmarkDifference <= 1.0;
-      return DirectImageDiagnostic(
-        width: image.cols,
-        height: image.rows,
-        productionCount: rows.count,
-        confidence: confidence,
-        boundingBox: bbox,
-        landmarks: landmarks,
-        productionAccepted:
-            rows.count == 1 &&
-            confidence != null &&
-            confidence >= detectorThreshold,
-        maximumBoundingBoxDifference: bboxDifference,
-        maximumLandmarkDifference: landmarkDifference,
-        materiallyMatchesPython: matches,
-      );
-    } finally {
-      productionFaces?.dispose();
-      image?.dispose();
-      if (await imageFile.exists()) await imageFile.delete();
     }
   }
 
@@ -572,23 +467,6 @@ class FacePipeline {
     (index) => Point2d(row[4 + index * 2], row[5 + index * 2]),
     growable: false,
   );
-
-  double _maximumDifference(List<double> first, List<double> second) {
-    var maximum = 0.0;
-    for (var index = 0; index < first.length; index++) {
-      maximum = math.max(maximum, (first[index] - second[index]).abs());
-    }
-    return maximum;
-  }
-
-  double _maximumPointDifference(List<Point2d> first, List<Point2d> second) {
-    var maximum = 0.0;
-    for (var index = 0; index < first.length; index++) {
-      maximum = math.max(maximum, (first[index].x - second[index].x).abs());
-      maximum = math.max(maximum, (first[index].y - second[index].y).abs());
-    }
-    return maximum;
-  }
 
   void dispose() {
     _debugDetector?.dispose();

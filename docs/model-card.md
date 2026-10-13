@@ -13,7 +13,7 @@ aligned `[batch, 3, 224, 224]` float32 tensor and returns a
 | Size | 3,241,210 bytes |
 | Public SHA-256 | `1b87df5663c9cc9bc156bdf98377a6680d66fcc3ce2d6f6a40394f3f027d196f` |
 | Original export SHA-256 | `ec6dc4b580d6db053725933b61b78363e4701a1ee5082cbf30c0cc0e0cc347c4` |
-| Locked cosine threshold | `0.2071264386177063` |
+| Historical internal-validation threshold | `0.2071264386177063` |
 | Training/internal validation data | DigiFace-1M synthetic faces |
 | External evaluation | LFW View 2 fixed pairs, one run without recalibration |
 
@@ -37,6 +37,10 @@ this repository.
 The public ONNX copy redacts only private source-root strings from exporter
 stack-trace metadata using equal-length byte replacements. Every other byte is
 identical to the verified export; no tensor data or protobuf layout changed.
+
+The current application separately uses provisional threshold `0.35`, pose-only
+liveness, and three individual comparisons plus an aggregate comparison. The
+historical locked-threshold metrics below do not establish accuracy at `0.35`.
 
 ## Performance boundary
 
