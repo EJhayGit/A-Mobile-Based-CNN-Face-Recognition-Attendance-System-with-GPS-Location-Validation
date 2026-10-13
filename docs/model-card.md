@@ -15,7 +15,7 @@ aligned `[batch, 3, 224, 224]` float32 tensor and returns a
 | Original export SHA-256 | `ec6dc4b580d6db053725933b61b78363e4701a1ee5082cbf30c0cc0e0cc347c4` |
 | Historical internal-validation threshold | `0.2071264386177063` |
 | Training/internal validation data | DigiFace-1M synthetic faces |
-| External evaluation | LFW View 2 fixed pairs, one run without recalibration |
+| External evaluation | Original locked-threshold LFW; later fixed-0.35 LFW View 2 and AgeDB-30 |
 
 ## Intended use and restriction
 
@@ -41,6 +41,7 @@ identical to the verified export; no tensor data or protobuf layout changed.
 The current application separately uses provisional threshold `0.35`, pose-only
 liveness, and three individual comparisons plus an aggregate comparison. The
 historical locked-threshold metrics below do not establish accuracy at `0.35`.
+The later single-pair benchmarks also do not validate the complete app rule.
 
 ## Performance boundary
 
@@ -49,6 +50,15 @@ The final internal synthetic validation record reported 98.42% accuracy and
 reported 73.10% accuracy, 35.20% false acceptance, 18.60% false rejection, and
 26.90% balanced error. These mixed results show a material synthetic-to-real
 generalization limitation.
+
+The [updated thesis](thesis/AGILA-Thesis-Public-Edition.pdf) additionally reports
+post-hoc LFW View 2 at fixed `0.35`: 77.17% accuracy, 8.43% FAR, 37.23% FRR,
+22.83% balanced error; and no-tuning AgeDB-30 at the same threshold: 51.28%
+accuracy, 16.27% FAR, 81.17% FRR, 48.72% balanced error. Each denominator is
+6,000 official pairs, including processing failures. These manuscript-reported
+model-level results were not rerun for this release and do not include the
+application's three-template/aggregate, liveness, or GPS decisions. The
+threshold remains provisional; see [model development](model-development.md).
 
 The model is not certified for identity, access control, surveillance, law
 enforcement, safety-critical decisions, or production biometric security. It

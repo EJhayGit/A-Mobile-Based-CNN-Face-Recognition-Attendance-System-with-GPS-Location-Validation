@@ -1,4 +1,4 @@
-# AGILA — CNN-Based Facial Recognition Attendance System with GPS Authentication
+# AGILA — A Mobile-Based CNN Face Recognition Attendance System with GPS Location Validation
 
 AGILA is an undergraduate Computer Science thesis prototype for construction
 field-personnel attendance. It combines an Android application, a Fleet Manager
@@ -6,8 +6,7 @@ web application, a FastAPI backend, and PostgreSQL/Supabase storage. Facial
 verification, pose-based liveness, and GPS checks run on the phone; accepted
 attendance is encrypted locally and synchronized when connectivity returns.
 
-The official thesis title is **Cross-Platform CNN-Based Mobile Facial Recognition
-Attendance System with GPS Authentication**. The implemented mobile client is
+The official thesis title is **A Mobile-Based CNN Face Recognition Attendance System with GPS Location Validation**. The implemented mobile client is
 Android-only. This public release contains selected application and model source;
 it does not contain the private thesis workspace or its development history.
 
@@ -174,11 +173,26 @@ and the aggregate must satisfy the production verification rule. Active liveness
 uses head turns and centered return; the unreliable color-response gate was removed.
 
 Historical internal synthetic validation reported 98.42% accuracy and 1.58% EER
-at `0.2071264386`. The historical fixed-threshold LFW evaluation reported 73.10%
-accuracy, 35.20% FAR, and 18.60% FRR. These results do not validate runtime `0.35`,
-constitute on-device accuracy, or establish presentation-attack resistance.
-Participant studies and later engineering changes are separate evidence; this
-release does not publish participant records or claim production readiness.
+at `0.2071264386`. The original locked-threshold LFW evaluation reported 73.10%
+accuracy, 35.20% FAR, and 18.60% FRR. The updated thesis also reports the following
+later model-level evaluations at the already chosen provisional `0.35`:
+
+| Evaluation | Accuracy | FAR | FRR | Balanced error |
+| --- | ---: | ---: | ---: | ---: |
+| Post-hoc LFW View 2 | 77.17% | 8.43% | 37.23% | 22.83% |
+| No-tuning AgeDB-30 | 51.28% | 16.27% | 81.17% | 48.72% |
+
+Each uses 6,000 official pairs, retaining processing failures in the denominator.
+These are single-pair model decisions, not the app's three-template/aggregate,
+liveness, GPS, or complete attendance workflow. They were not rerun for this
+release; `0.35` remains provisional and the synthetic-to-real limitation remains.
+The thesis reports 120 of 132 completed attendance attempts (90.9% workflow
+completion, not biometric accuracy), mean SUS 57.5 in each small personnel and
+manager group, and all 10 records synchronized after one controlled 15-minute
+outage. These descriptive study findings do not establish production readiness.
+GPS checks provide location validation; formal GPS-spoof and presentation-attack
+testing was not performed. No raw participant source records are published.
+The later device-authorization correction is separate engineering evidence.
 See [model development](docs/model-development.md),
 [export](docs/model-export.md), and [model card](docs/model-card.md).
 
@@ -190,8 +204,11 @@ Dataset images, checkpoints, embeddings, and experiment outputs are excluded.
 
 ## Thesis manuscript
 
-The final manuscript has not yet been supplied for public release. No draft or
-older manuscript is included; publication will wait for the authors' final file.
+Read the [updated thesis public edition](docs/thesis/AGILA-Thesis-Public-Edition.pdf)
+and its [publication and privacy note](docs/thesis/README.md). The 153-page public
+copy omits sensitive appendix pages and corrects unrelated PDF title metadata.
+Retained manuscript content, original printed pagination, and historical
+appendix snapshots are unchanged. The original supplied PDF is not included.
 
 ## Verification
 

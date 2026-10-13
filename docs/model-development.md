@@ -28,10 +28,11 @@ landmarks; a non-reflective similarity transform aligned the face to 224 x 224
 before ImageNet-style channel normalization. Intended AGILA participants were
 not used as model-training data.
 
-Labeled Faces in the Wild (LFW) was used once for external evaluation with its
-fixed View 2 pairs and the already locked internal threshold. LFW was not used
-for training, checkpoint selection, or threshold calibration. No LFW files are
-included.
+The original Labeled Faces in the Wild (LFW) evaluation used fixed View 2 pairs
+and the already locked internal threshold. The updated thesis adds a later
+post-hoc LFW run and a no-tuning AgeDB-30 run at the already chosen provisional
+application threshold `0.35`. Neither benchmark was used for training,
+checkpoint selection, or threshold calibration. Neither dataset is included.
 
 ## Collapse diagnosis and curriculum
 
@@ -68,6 +69,24 @@ At that fixed threshold, the one-time LFW evaluation processed both images for
 18.60% false rejection, and 26.90% balanced error. The weaker external result
 shows a material synthetic-to-real generalization limitation; AGILA does not
 claim universal biometric accuracy or production-grade spoof resistance.
+
+The [updated thesis public edition](thesis/AGILA-Thesis-Public-Edition.pdf)
+reports later fixed-`0.35` results:
+
+| Benchmark | Accuracy | FAR | FRR | Balanced error | Pairs |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Post-hoc LFW View 2 | 77.17% | 8.43% | 37.23% | 22.83% | 6,000 |
+| No-tuning AgeDB-30 | 51.28% | 16.27% | 81.17% | 48.72% | 6,000 |
+
+Failures remain in each official-pair denominator. These are single-pair
+embedding comparisons, not a reproduction of the application decision rule,
+liveness, GPS, or complete attendance workflow. They are reported source
+evidence, not experiments executed during this release update. The later
+benchmarks do not replace the original locked-threshold result or justify tuning
+on external test data. In particular, AgeDB-30's high false rejection shows
+that `0.35` remains provisional and cannot support a production-readiness claim.
+Public source includes the historical fixed-threshold LFW evaluator; publication
+of these later results does not claim the later evaluation tools are bundled.
 
 An older internal held-out split overlapped the final training identities. It
 was rejected before scoring and produced no held-out result.
