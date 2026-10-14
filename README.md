@@ -58,6 +58,22 @@ with Leaflet/OpenStreetMap. Montserrat's font notice is in
 | `docs/` | Public model documentation, database setup, and asset notices |
 | `Dockerfile` | Backend and dashboard container |
 
+## Start here
+
+The command examples use PowerShell 7 on Windows. Clone the public repository
+and run setup commands from its root unless a step changes directories:
+
+```powershell
+git clone https://github.com/EJhayGit/A-Mobile-Based-CNN-Face-Recognition-Attendance-System-with-GPS-Location-Validation.git
+cd A-Mobile-Based-CNN-Face-Recognition-Attendance-System-with-GPS-Location-Validation
+```
+
+For the server, the [Docker Installation](#docker-installation) path needs Git,
+Docker and a separately configured database; Python and Flutter are not needed
+on the host. Use the source-backend path below for Python development. Flutter
+and Android tooling are needed only when building/running the mobile client.
+Always configure your own database and mobile `API_BASE_URL`.
+
 ## Prerequisites
 
 - Python 3.11+ compatible with the pinned backend dependencies
@@ -85,8 +101,28 @@ with Leaflet/OpenStreetMap. Montserrat's font notice is in
 4. Replace the database and JWT placeholders in the ignored `backend/.env`.
    For local HTTP, use `ENVIRONMENT=development`, `COOKIE_SECURE=false`,
    `ALLOWED_HOSTS=localhost,127.0.0.1`, and `BACKEND_HOST=127.0.0.1`.
-   The application does **not** load `.env` automatically. Inject its values
-   into your shell using your environment manager before starting Python.
+   The application does **not** load `.env` automatically. In the same PowerShell
+   window used for bootstrap and server startup, load the unquoted `KEY=value`
+   file below. Full-line comments and blank lines are supported; quote characters
+   are treated literally, so do not quote values in this file.
+
+   ```powershell
+   Get-Content backend/.env | ForEach-Object {
+       $line = $_.Trim()
+       if ($line -and -not $line.StartsWith('#')) {
+           $name, $value = $line -split '=', 2
+           if ($name -notmatch '^[A-Za-z_][A-Za-z0-9_]*$' -or $null -eq $value) {
+               throw 'Invalid environment file line.'
+           }
+           Set-Item -LiteralPath "Env:$name" -Value $value
+       }
+   }
+   ```
+
+   For a new JWT secret, run
+   `.venv/Scripts/python.exe -c "import secrets; print(secrets.token_urlsafe(48))"`
+   locally and place its output in your private file. Never paste credentials
+   into GitHub or commit the real `.env`.
 5. Bootstrap the first manager (the command prompts for the password), then run:
 
    ```powershell
@@ -94,9 +130,10 @@ with Leaflet/OpenStreetMap. Montserrat's font notice is in
    .venv/Scripts/python.exe -m backend.server --host 127.0.0.1 --port 8080
    ```
 
-Open `http://127.0.0.1:8080/login`. `/health` is the lightweight reachability
-endpoint. Later devices for existing accounts need manager authorization; a
-fresh activation can authorize the first installation.
+Open `http://127.0.0.1:8080/login`. `/health` checks database connectivity with
+`SELECT 1`, while successful login also requires the complete schema. Later
+devices for existing accounts need manager authorization; a fresh activation can
+authorize the first installation.
 
 ## Docker Installation
 
@@ -119,7 +156,15 @@ docker pull ghcr.io/ejhaygit/a-mobile-based-cnn-face-recognition-attendance-syst
    `backend/.env`. Set your own `DATABASE_URL` and `JWT_SECRET` (at least 32
    random bytes). Use a database hostname reachable from the container;
    `localhost` inside it refers to the container. On Docker Desktop,
-   `host.docker.internal` can address a host database. Keep this file private.
+   `host.docker.internal` can address a host database. Keep values unquoted as
+   `KEY=value` (matching Docker's environment-file format). To generate a JWT
+   secret without installing Python on your host:
+
+   ```powershell
+   docker run --rm --entrypoint python ghcr.io/ejhaygit/a-mobile-based-cnn-face-recognition-attendance-system-with-gps-location-validation:1.0.1 -c "import secrets; print(secrets.token_urlsafe(48))"
+   ```
+
+   Copy the output into your private `JWT_SECRET` value and keep the file private.
 3. For local HTTP use, start the downloaded image:
 
    ```powershell
@@ -127,7 +172,7 @@ docker pull ghcr.io/ejhaygit/a-mobile-based-cnn-face-recognition-attendance-syst
    ```
 
 4. If the separately configured database has no manager, bootstrap one; the
-   command prompts privately for the password:
+   command prompts privately for a password of at least 10 characters:
 
    ```powershell
    docker exec -it agila python -m backend.scripts.bootstrap_manager --login-id manager
@@ -186,8 +231,10 @@ from their official sources, verify them, and preserve the applicable notices:
 - `face_detection_yunet_2023mar.onnx` — [OpenCV Zoo YuNet](https://github.com/opencv/opencv_zoo/tree/4.10.0/models/face_detection_yunet)
 - `face_landmarker.task` — [MediaPipe Face Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker)
 
-See the [runtime asset guide](mobile_app/assets/models/README.md). A diagnostic
-face image is no longer required. Then:
+See the [runtime asset guide](mobile_app/assets/models/README.md) for exact
+download, placement, and hash-check commands. A diagnostic face image is no
+longer required. Confirm tooling with `flutter doctor` and `flutter devices`.
+Then:
 
 ```powershell
 cd mobile_app
@@ -197,11 +244,39 @@ flutter test
 flutter run --dart-define=API_BASE_URL=https://YOUR-BACKEND-HOST
 ```
 
-For local debug HTTP, point to an address reachable from the phone/emulator and
-allow that backend hostname. Release builds require HTTPS. Create your own
-ignored signing configuration from `android/key.properties.example`; signing
-keys, passwords, APKs, and build caches are excluded from Git. This repository
-does not supply a signed APK or claim that a fresh device installation was tested.
+Always provide your own `API_BASE_URL`; the source has a historical hosted
+default and your installation should use your own server. The URL is a complete
+origin with no `/api` path, query, credentials, or fragment.
+
+For local debug HTTP with Android Emulator:
+
+```powershell
+flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8080
+```
+
+The emulator's [host-loopback alias](https://developer.android.com/studio/run/emulator-networking-address)
+is `10.0.2.2`. Add `10.0.2.2` to the backend's `ALLOWED_HOSTS` and restart it;
+for Docker, replace the run command's override with
+`-e ALLOWED_HOSTS=localhost,127.0.0.1,10.0.2.2`. A real phone on Wi-Fi needs
+your computer's LAN address, the same trusted network, an appropriate local
+firewall rule, and that LAN address in `ALLOWED_HOSTS`. A source backend must
+bind `0.0.0.0`; replace Docker's `-p 127.0.0.1:8080:8080` with
+`-p YOUR_COMPUTER_LAN_IP:8080:8080` for that controlled LAN test. The phone's
+`localhost` is the phone itself. Debug builds allow HTTP; release builds require
+HTTPS. Camera/location permissions and device behavior need physical testing.
+
+Run debug setup before creating `android/key.properties`. For release builds,
+copy `android/key.properties.example` to that ignored file and supply all four
+values for your own keystore. `storeFile` resolves relative to `mobile_app/android`.
+A partially filled signing file also breaks debug Gradle configuration, so do
+not create it until you can complete it. Then build with your own HTTPS origin:
+
+```powershell
+flutter build apk --release --dart-define=API_BASE_URL=https://YOUR-BACKEND-HOST
+```
+
+Keys, passwords, APKs, and build caches are excluded from Git. This repository
+does not supply a signed APK or claim a new physical installation was tested.
 
 ## Environment variables
 
