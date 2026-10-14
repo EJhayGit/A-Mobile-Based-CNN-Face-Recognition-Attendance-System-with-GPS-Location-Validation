@@ -98,32 +98,84 @@ Open `http://127.0.0.1:8080/login`. `/health` is the lightweight reachability
 endpoint. Later devices for existing accounts need manager authorization; a
 fresh activation can authorize the first installation.
 
-## Docker
+## Docker Installation
 
-The existing Dockerfile builds only the backend and Fleet Manager web app. It
-uses Python 3.11, installs pinned backend requirements, serves the dashboard from
-the same origin, runs as an unprivileged user, exposes port 8080, and probes
-`/health`. Credentials are supplied at runtime.
-
-After configuring the database and `backend/.env` above, local HTTP testing:
+Download the public [AGILA container package](https://github.com/users/EJhayGit/packages/container/package/a-mobile-based-cnn-face-recognition-attendance-system-with-gps-location-validation). Version `1.0.1`
+contains the FastAPI backend, Fleet Manager website, and production dependencies
+for **Linux AMD64**. Docker Desktop must use Linux containers. No login to GitHub
+is required to pull it; the Flutter application is separate.
 
 ```powershell
-docker build -t agila .
-docker run --rm --name agila -p 127.0.0.1:8080:8080 --env-file backend/.env -e BACKEND_HOST=0.0.0.0 -e ENVIRONMENT=development -e COOKIE_SECURE=false -e ALLOWED_HOSTS=localhost,127.0.0.1 agila
+docker pull ghcr.io/ejhaygit/a-mobile-based-cnn-face-recognition-attendance-system-with-gps-location-validation:1.0.1
 ```
 
-Use a database hostname reachable **from the container**; host-machine
-`localhost` refers to the container itself. On Docker Desktop,
-`host.docker.internal` can address a host database. Visit `/login` and `/health`
-at the local address above. Bootstrap a manager with the same configured
-environment using `docker exec -it agila python -m backend.scripts.bootstrap_manager --login-id manager`.
+1. Configure PostgreSQL/Supabase **separately** following
+   [database setup](docs/database-setup.md). The image contains no database,
+   migrations to execute automatically, private credentials, or participant
+   records. Configure the application schema and a least-privilege login before
+   using account/attendance features. Never run the full reset chain on existing
+   data.
+2. Copy `backend/.env.example` from this repository to your ignored
+   `backend/.env`. Set your own `DATABASE_URL` and `JWT_SECRET` (at least 32
+   random bytes). Use a database hostname reachable from the container;
+   `localhost` inside it refers to the container. On Docker Desktop,
+   `host.docker.internal` can address a host database. Keep this file private.
+3. For local HTTP use, start the downloaded image:
 
-For hosting, use an HTTPS reverse proxy, `ENVIRONMENT=production`,
-`COOKIE_SECURE=true`, explicit `ALLOWED_HOSTS`, and a PostgreSQL connection with
-`sslmode=require`. Keep secrets in the hosting platform. No production deployment
-is performed by this release update. Docker configuration was statically reviewed;
-a container build/smoke test could not run because the local Docker engine was
-unavailable.
+   ```powershell
+   docker run -d --name agila -p 127.0.0.1:8080:8080 --env-file backend/.env -e BACKEND_HOST=0.0.0.0 -e PORT=8080 -e ENVIRONMENT=development -e COOKIE_SECURE=false -e ALLOWED_HOSTS=localhost,127.0.0.1 ghcr.io/ejhaygit/a-mobile-based-cnn-face-recognition-attendance-system-with-gps-location-validation:1.0.1
+   ```
+
+4. If the separately configured database has no manager, bootstrap one; the
+   command prompts privately for the password:
+
+   ```powershell
+   docker exec -it agila python -m backend.scripts.bootstrap_manager --login-id manager
+   ```
+
+5. Open the Fleet Manager website at `http://127.0.0.1:8080/login`. Verify the
+   backend with `http://127.0.0.1:8080/health`, which should return
+   `{"status":"ok"}`. This health check performs a database `SELECT 1`; it
+   confirms connectivity, not schema completeness or biometric accuracy.
+
+   ```powershell
+   curl.exe --fail http://127.0.0.1:8080/health
+   docker ps --filter name=agila
+   docker logs agila
+   ```
+
+Required configuration names are `DATABASE_URL`, `JWT_SECRET`, `ALLOWED_HOSTS`,
+`ENVIRONMENT`, and `COOKIE_SECURE`. The image defaults to `BACKEND_HOST=0.0.0.0`,
+`PORT=8080`, `ENVIRONMENT=production`, and `COOKIE_SECURE=true`; the local command
+above deliberately supplies development settings. The complete optional
+configuration is in [backend/.env.example](backend/.env.example) and the
+Environment variables section below. No runtime environment file or secret is
+embedded in the image. Remove a stopped local container before reusing its name.
+
+For hosting, configure your own HTTPS reverse proxy, explicit `ALLOWED_HOSTS`,
+`ENVIRONMENT=production`, `COOKIE_SECURE=true`, and a `DATABASE_URL` including
+`sslmode=require`. Keep credentials in runtime configuration. The image does
+not change or deploy the existing Render service.
+
+The unchanged [Dockerfile](Dockerfile) remains available for source builds:
+`docker build --platform linux/amd64 -t agila .`. The published image runs as
+the unprivileged `agila` user and exposes container port 8080.
+
+### Verified release
+
+On 2026-10-14, version `1.0.1` built from public source commit
+`e0e9fa16b4e56026893333301dcbf9104109e880` passed production-mode startup,
+SSL PostgreSQL `/health`, `/login`, `/assets/app.js`, `/assets/styles.css`,
+and the Dockerfile healthcheck using disposable local containers. No project
+migrations or existing database operations were performed. Image inspection
+found no private credentials, runtime `.env`, Git history, Flutter source,
+model/training artifacts, or participant records. An anonymous pull using an
+empty Docker credential configuration and both public web links passed.
+Registry digest: `sha256:58f7d929648c80cbc515d85817a769940a0e675fa068e73b78032cfd9486f180`.
+
+The [printable Appendix P](docs/thesis/GITHUB-DOCKER-LINKS.pdf) contains the
+verified links and pull command; see its
+[source and insertion note](docs/thesis/GITHUB-DOCKER-LINKS.md).
 
 ## Android setup
 
