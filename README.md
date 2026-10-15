@@ -236,10 +236,6 @@ model/training artifacts, or participant records. An anonymous pull using an
 empty Docker credential configuration and both public web links passed.
 Registry digest: `sha256:58f7d929648c80cbc515d85817a769940a0e675fa068e73b78032cfd9486f180`.
 
-The [printable Appendix P](docs/thesis/GITHUB-DOCKER-LINKS.pdf) contains the
-verified links and pull command; see its
-[source and insertion note](docs/thesis/GITHUB-DOCKER-LINKS.md).
-
 ## Android setup
 
 The existing final inference-only MerLens ONNX is retained in
@@ -349,11 +345,24 @@ Dataset images, checkpoints, embeddings, and experiment outputs are excluded.
 
 ## Thesis manuscript
 
-Read the [updated thesis public edition](docs/thesis/AGILA-Thesis-Public-Edition.pdf)
-and its [publication and privacy note](docs/thesis/README.md). The 153-page public
-copy omits sensitive appendix pages and corrects unrelated PDF title metadata.
-Retained manuscript content, original printed pagination, and historical
-appendix snapshots are unchanged. The original supplied PDF is not included.
+Read the [final thesis public edition](docs/thesis/AGILA-Thesis-Public-Edition.pdf).
+This 140-page public-safe copy was prepared from the authors' 159-page final
+submission supplied on October 15, 2026. The original PDF remains unchanged and
+is not included in this repository.
+
+Signed letters/certificates, CVs, and account/attendance screenshots are omitted
+(original PDF pages 106-107, 135-143, 147-150 and 156-159). The approval-sheet
+signature, survey account emails, precise street location, and researcher
+photos/biographies are permanently removed from retained pages. Author credits,
+research results, references and original printed pagination are retained;
+the original contents list still mentions omitted appendices. The street-location
+page is rendered as a flattened image to prevent recovery of the removed text.
+PDF metadata is sanitized; annotations and attachments are excluded.
+
+Appendix O in the paper contains the repository and container links. Only the
+paper is kept in `docs/thesis/`; the separate links appendix files are removed.
+The manuscript records its authors' research and publication plan; the existing
+inference-only MerLens ONNX remains in this repository by their separate direction.
 
 ## Verification
 
