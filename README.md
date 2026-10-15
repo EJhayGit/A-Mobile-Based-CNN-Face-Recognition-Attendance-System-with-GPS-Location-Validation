@@ -17,6 +17,20 @@ Manager access requires an authorized account. The
 [backend health check](https://agila-thesis.onrender.com/health) reports service
 and database connectivity. The Android application runs separately.
 
+## Download Android APK
+
+[Download the signed AGILA 1.0.1 APK](https://github.com/EJhayGit/A-Mobile-Based-CNN-Face-Recognition-Attendance-System-with-GPS-Location-Validation/releases/download/v1.0.1/AGILA-1.0.1-release.apk)
+(approximately 260 MB), or open the [release page and installation notes](https://github.com/EJhayGit/A-Mobile-Based-CNN-Face-Recognition-Attendance-System-with-GPS-Location-Validation/releases/tag/v1.0.1).
+The [SHA-256 checksum](https://github.com/EJhayGit/A-Mobile-Based-CNN-Face-Recognition-Attendance-System-with-GPS-Location-Validation/releases/download/v1.0.1/AGILA-1.0.1-release.apk.sha256)
+is available to verify the download.
+
+Requires Android 7.0/API 24 or newer and an authorized account/activation.
+The APK uses the live AGILA HTTPS server by default. This initial pre-release
+still requires physical-device rehearsal. It cannot update an earlier debug APK
+in place because the signing keys differ; do not uninstall an app containing
+unsynchronized records. Use a dedicated test device for the first installation.
+The APK is a Release asset; private signing files are not published.
+
 ## Features
 
 - Field Personnel activation, sign-in, deactivation, and history-preserving deletion

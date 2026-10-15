@@ -141,3 +141,6 @@ docs/workflow/
 
 # Local-only demo credentials and state.
 /demo/local/
+
+# Private Android release signing and local recovery material.
+/mobile_app/android/.signing-private/
