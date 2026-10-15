@@ -19,16 +19,18 @@ and database connectivity. The Android application runs separately.
 
 ## Download Android APK
 
-[Download the signed AGILA 1.0.1 APK](https://github.com/EJhayGit/A-Mobile-Based-CNN-Face-Recognition-Attendance-System-with-GPS-Location-Validation/releases/download/v1.0.1/AGILA-1.0.1-release.apk)
-(approximately 260 MB), or open the [release page and installation notes](https://github.com/EJhayGit/A-Mobile-Based-CNN-Face-Recognition-Attendance-System-with-GPS-Location-Validation/releases/tag/v1.0.1).
-The [SHA-256 checksum](https://github.com/EJhayGit/A-Mobile-Based-CNN-Face-Recognition-Attendance-System-with-GPS-Location-Validation/releases/download/v1.0.1/AGILA-1.0.1-release.apk.sha256)
+[Download the signed AGILA 1.0.5 APK](https://github.com/EJhayGit/A-Mobile-Based-CNN-Face-Recognition-Attendance-System-with-GPS-Location-Validation/releases/download/v1.0.5/AGILA-1.0.5-release.apk)
+(approximately 260 MB), or open the [release page and installation notes](https://github.com/EJhayGit/A-Mobile-Based-CNN-Face-Recognition-Attendance-System-with-GPS-Location-Validation/releases/tag/v1.0.5).
+The [SHA-256 checksum](https://github.com/EJhayGit/A-Mobile-Based-CNN-Face-Recognition-Attendance-System-with-GPS-Location-Validation/releases/download/v1.0.5/AGILA-1.0.5-release.apk.sha256)
 is available to verify the download.
 
 Requires Android 7.0/API 24 or newer and an authorized account/activation.
-The APK uses the live AGILA HTTPS server by default. This initial pre-release
-still requires physical-device rehearsal. It cannot update an earlier debug APK
-in place because the signing keys differ; do not uninstall an app containing
-unsynchronized records. Use a dedicated test device for the first installation.
+The APK uses the live AGILA HTTPS server by default. Version 1.0.5 fixes
+release-only camera/face-processing crashes; the face-camera flow was confirmed
+on the affected Android phone. It uses the same release signing key as 1.0.1,
+so existing signed installations can update in place. Earlier debug APKs use a
+different key; do not uninstall an app containing unsynchronized records.
+Other devices and complete GPS/offline/synchronization flows still need rehearsal.
 The APK is a Release asset; private signing files are not published.
 
 ## Features

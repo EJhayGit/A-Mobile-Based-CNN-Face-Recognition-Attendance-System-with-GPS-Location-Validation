@@ -1,7 +1,7 @@
 name: offline_trucking_attendance
 description: Minimum offline Android attendance integration for the thesis.
 publish_to: "none"
-version: 1.0.1+2
+version: 1.0.5+6
 
 environment:
   sdk: ^3.12.2
