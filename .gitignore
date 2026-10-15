@@ -138,3 +138,6 @@ supabase/.temp/
 .codex/
 AGENTS.md
 docs/workflow/
+
+# Local-only demo credentials and state.
+/demo/local/

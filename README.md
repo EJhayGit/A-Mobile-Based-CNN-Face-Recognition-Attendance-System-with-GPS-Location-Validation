@@ -58,6 +58,17 @@ with Leaflet/OpenStreetMap. Montserrat's font notice is in
 | `docs/` | Public model documentation, database setup, and asset notices |
 | `Dockerfile` | Backend and dashboard container |
 
+## Easy local demonstration on Windows
+
+For a classroom/dean-PC demonstration, extract the full repository and
+**double-click `Start-Demo.cmd`** after installing Docker Desktop's Linux engine.
+It automatically prepares a separate local database, creates private random
+credentials, starts AGILA, and opens Fleet Manager. No Python, Flutter or cloud
+database setup is needed on that PC. `Stop-Demo.cmd` stops only the demo and
+preserves its data. See the [demo guide](demo/README.md) for installation,
+rehearsal, alternate ports and Android phone access. Local phone integration
+requires an HTTP-capable debug build; the existing release APK requires HTTPS.
+
 ## Start here
 
 The command examples use PowerShell 7 on Windows. Clone the public repository

@@ -30,3 +30,6 @@ supabase
 **/*.keystore
 **/*.pem
 **/*.key
+
+# Demo orchestration and private local demo files are not server image input.
+demo

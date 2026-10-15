@@ -1,0 +1,73 @@
+name: agila-dean-demo
+
+x-server-image: &server-image ghcr.io/ejhaygit/a-mobile-based-cnn-face-recognition-attendance-system-with-gps-location-validation:1.0.1@sha256:58f7d929648c80cbc515d85817a769940a0e675fa068e73b78032cfd9486f180
+x-app-environment: &app-environment
+  DATABASE_URL: postgresql+psycopg://agila_demo_app:${DEMO_DB_APP_PASSWORD:?Run Start-Demo.cmd first}@database:5432/agila_demo
+  JWT_SECRET: ${DEMO_JWT_SECRET:?Run Start-Demo.cmd first}
+  ENVIRONMENT: development
+  COOKIE_SECURE: "false"
+  ALLOWED_HOSTS: localhost,127.0.0.1,${DEMO_BIND_ADDRESS:-127.0.0.1}
+  BACKEND_HOST: 0.0.0.0
+  PORT: "8080"
+  ENABLE_API_DOCS: "false"
+
+services:
+  database:
+    image: postgres:17-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826
+    environment:
+      POSTGRES_DB: agila_demo
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DEMO_DB_ADMIN_PASSWORD:?Run Start-Demo.cmd first}
+    volumes:
+      - demo-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres -d agila_demo"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+    labels:
+      io.agila.demo: "true"
+
+  setup:
+    image: *server-image
+    platform: linux/amd64
+    working_dir: /app
+    entrypoint: [python, /demo/initialize.py]
+    environment:
+      <<: *app-environment
+      PYTHONPATH: /app
+      DEMO_JWT_SECRET: ${DEMO_JWT_SECRET:?Run Start-Demo.cmd first}
+      DEMO_INSTANCE_ID: ${DEMO_INSTANCE_ID:?Run Start-Demo.cmd first}
+      DEMO_DB_ADMIN_PASSWORD: ${DEMO_DB_ADMIN_PASSWORD:?Run Start-Demo.cmd first}
+      DEMO_DB_APP_PASSWORD: ${DEMO_DB_APP_PASSWORD:?Run Start-Demo.cmd first}
+      DEMO_MANAGER_LOGIN: ${DEMO_MANAGER_LOGIN:-demo_manager}
+      DEMO_MANAGER_PASSWORD: ${DEMO_MANAGER_PASSWORD:?Run Start-Demo.cmd first}
+    volumes:
+      - ./initialize.py:/demo/initialize.py:ro
+      - ../supabase/migrations:/migrations:ro
+    depends_on:
+      database:
+        condition: service_healthy
+    labels:
+      io.agila.demo: "true"
+
+  server:
+    image: *server-image
+    platform: linux/amd64
+    environment: *app-environment
+    ports:
+      - "${DEMO_BIND_ADDRESS:-127.0.0.1}:${DEMO_HTTP_PORT:-8080}:8080"
+    depends_on:
+      database:
+        condition: service_healthy
+      setup:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    labels:
+      io.agila.demo: "true"
+
+volumes:
+  demo-data:
+    labels:
+      io.agila.demo: "true"
