@@ -60,7 +60,7 @@ with Leaflet/OpenStreetMap. Montserrat's font notice is in
 
 ## Easy local demonstration on Windows
 
-For a classroom/dean-PC demonstration, extract the full repository and
+To run a local demonstration, extract the full repository and
 **double-click `Start-Demo.cmd`** after installing Docker Desktop's Linux engine.
 It automatically prepares a separate local database, creates private random
 credentials, starts AGILA, and opens Fleet Manager. No Python, Flutter or cloud

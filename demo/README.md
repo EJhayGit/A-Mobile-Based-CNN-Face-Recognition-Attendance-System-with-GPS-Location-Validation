@@ -1,9 +1,9 @@
-# AGILA demonstration on the dean's PC
+# AGILA Demo Setup
 
 This setup runs Fleet Manager, FastAPI and a separate PostgreSQL demo database
 on the PC. It uses the published server image and existing migrations. No
 Python, Flutter, PostgreSQL installation, Supabase account or manually written
-environment file is needed on the dean's PC. It does not connect to the hosted
+environment file is needed on the demo PC. It does not connect to the hosted
 system or copy its users, credentials or attendance records.
 
 ## Prepare before the presentation
@@ -93,7 +93,7 @@ LAN demonstration. The launcher does not build or install an APK.
 
    The output is `mobile_app/build/app/outputs/flutter-apk/app-debug.apk` from
    the repository root. Prepare/install it before the presentation; no Flutter
-   tooling is needed on the dean's PC. Use the correct backend address in the
+   tooling is needed on the demo PC. Use the correct backend address in the
    app's server setup. A debug APK cannot update a differently signed release
    APK; use a dedicated test device and do not remove an installation containing
    unsynchronized records just to install this build.
