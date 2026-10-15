@@ -1,7 +1,7 @@
 # AGILA Demo Setup
 
 This setup runs Fleet Manager, FastAPI and a separate PostgreSQL demo database
-on the PC. It uses the published server image and existing migrations. No
+on the PC. It uses the published server image and one bundled SQL file. No
 Python, Flutter, PostgreSQL installation, Supabase account or manually written
 environment file is needed on the demo PC. It does not connect to the hosted
 system or copy its users, credentials or attendance records.
@@ -15,8 +15,9 @@ system or copy its users, credentials or attendance records.
    School IT may need to enable virtualization or WSL. Do this before demo day.
 2. Download the entire [public repository](https://github.com/EJhayGit/A-Mobile-Based-CNN-Face-Recognition-Attendance-System-with-GPS-Location-Validation)
    using **Code > Download ZIP**, and extract it completely into a writable
-   folder. Alternatively clone it with Git. Keep `demo/` and
-   `supabase/migrations/` beside the launchers; do not run inside the ZIP.
+   folder with a short path such as `C:\AGILA`. Alternatively clone it with Git.
+   Keep `demo/` beside the launchers; do not run inside the ZIP. Extraction must
+   finish without skipped files or Windows "Path too long" errors.
 3. Double-click **Start-Demo.cmd** in the extracted repository root. Internet
    is needed for the first image downloads; allow time for those downloads.
 4. Wait for **Ready**. The launcher opens Fleet Manager and a private Notepad
@@ -36,8 +37,8 @@ and school policies still require the user's/IT's normal approval.
   credentials in the ignored `demo/local/` folder.
 - Starts the separately named `agila-dean-demo` Compose project. PostgreSQL is
   reachable only by its containers; it publishes no database port on Windows.
-- Initializes an empty demo database using the eight exact approved migration
-  files and a restricted application login. It creates the initial manager.
+- Initializes an empty demo database using one verified `demo/init.sql` file
+  and a restricted application login. It creates the initial manager.
 - Waits for database-backed server health before opening `/login`.
 
 The default website is `http://127.0.0.1:8080/login`; health is
@@ -59,6 +60,25 @@ both. Copying the repository folder alone does not copy the database volume.
 The launcher refuses an unknown schema, different instance or changed migration
 bundle instead of resetting data. There is deliberately no automatic reset or
 volume-deletion command. Stop does not affect unrelated containers.
+
+## Single-file initialization and existing demos
+
+`demo/init.sql` bundles the eight original migrations in chronological order.
+The launcher verifies its SHA-256 before connecting to the database and executes
+it only for an empty, unmarked demo database. It is not an upgrade script and
+must never be run manually against an existing database. Historical migrations
+remain under `supabase/migrations/` for development and upgrade history; the
+local demo no longer mounts or reads that folder.
+
+Existing demos retain their original installation digest, so they can restart
+with this bundle without rerunning SQL. Preserve the matching `demo/local/`
+folder and Docker volume when updating or re-extracting the source. If that
+private folder was deleted, restore it from a backup or the Recycle Bin before
+starting; newly generated credentials cannot recover the old database.
+
+A shorter SQL filename does not resolve every Windows path limitation. Extract
+the complete repository to a short location and resolve all extraction errors,
+particularly before building the Android app.
 
 ## Connect an Android phone
 

@@ -22,28 +22,20 @@ EXPECTED_MIGRATIONS = {
 }
 
 
-def validate_migrations(directory: Path) -> dict[str, str]:
-    directory = Path(directory)
+EXPECTED_INITIALIZATION_SHA256 = "7f4f52dfdca45b66eeb02009b90ec18109d440ff3fc6d198d58b142f57c85fe7"
+
+
+def validate_initialization(path: Path) -> str:
+    """Read and verify one SQL bundle before any database connection."""
     try:
-        files = {path.name for path in directory.glob("*.sql") if path.is_file()}
-        if files != set(EXPECTED_MIGRATIONS):
-            raise RuntimeError("Bundled migrations do not match the approved set")
-        actual: dict[str, str] = {}
-        for name in sorted(EXPECTED_MIGRATIONS):
-            content = (
-                (directory / name)
-                .read_bytes()
-                .replace(b"\r\n", b"\n")
-                .replace(b"\r", b"\n")
-            )
-            actual[name] = hashlib.sha256(content).hexdigest()
-            if actual[name] != EXPECTED_MIGRATIONS[name]:
-                raise RuntimeError(
-                    "A bundled migration differs from the approved content"
-                )
-        return actual
+        content = Path(path).read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
     except OSError as error:
-        raise RuntimeError("Unable to verify bundled migrations") from error
+        raise RuntimeError(
+            "Unable to read demo/init.sql; extract the complete repository to a short path"
+        ) from error
+    if hashlib.sha256(content).hexdigest() != EXPECTED_INITIALIZATION_SHA256:
+        raise RuntimeError("Demo initialization SQL differs from the approved content")
+    return content.decode("utf-8")
 
 
 def migration_digest(migrations: dict[str, str]) -> str:
@@ -90,13 +82,14 @@ def _require_environment() -> tuple[str, str, str, str, str]:
     return instance, admin_password, app_password, jwt_secret, manager_password
 
 
-def initialize(migrations_directory: Path = Path("/migrations")) -> None:
+def initialize(initialization_file: Path = Path("/demo/init.sql")) -> None:
     # Imports are runtime-only so host-side guard tests need only the standard library.
     instance, admin_password, app_password, _jwt_secret, manager_password = (
         _require_environment()
     )
-    hashes = validate_migrations(migrations_directory)
-    digest = migration_digest(hashes)
+    initialization_sql = validate_initialization(initialization_file)
+    # Preserve the original eight-migration identity for existing demo restarts.
+    digest = migration_digest(EXPECTED_MIGRATIONS)
 
     import psycopg
     from psycopg import sql
@@ -137,10 +130,7 @@ def initialize(migrations_directory: Path = Path("/migrations")) -> None:
         tables = [row[0] for row in cursor.fetchall()]
         is_new = validate_installation(marker, instance, digest, tables)
         if is_new:
-            for name in sorted(hashes):
-                cursor.execute(
-                    (Path(migrations_directory) / name).read_text(encoding="utf-8")
-                )
+            cursor.execute(initialization_sql)
             cursor.execute("CREATE SCHEMA agila_demo_setup")
             cursor.execute(
                 "CREATE TABLE agila_demo_setup.installation (singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton), instance_id text NOT NULL, migration_digest text NOT NULL, state text NOT NULL CHECK (state = 'schema-ready'))"
@@ -184,10 +174,10 @@ def initialize(migrations_directory: Path = Path("/migrations")) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--migrations", default="/migrations")
+    parser.add_argument("--init-sql", default="/demo/init.sql")
     args = parser.parse_args()
     try:
-        initialize(Path(args.migrations))
+        initialize(Path(args.init_sql))
     except RuntimeError as error:
         print(f"Demo setup stopped: {error}", file=sys.stderr)
         return 1

@@ -45,7 +45,12 @@ services:
       DEMO_MANAGER_PASSWORD: ${DEMO_MANAGER_PASSWORD:?Run Start-Demo.cmd first}
     volumes:
       - ./initialize.py:/demo/initialize.py:ro
-      - ../supabase/migrations:/migrations:ro
+      - type: bind
+        source: ./init.sql
+        target: /demo/init.sql
+        read_only: true
+        bind:
+          create_host_path: false
     depends_on:
       database:
         condition: service_healthy

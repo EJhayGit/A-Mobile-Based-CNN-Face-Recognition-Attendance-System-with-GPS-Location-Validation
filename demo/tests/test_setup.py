@@ -1,6 +1,8 @@
 import contextlib
+import hashlib
 import importlib.util
 import io
+import json
 import shutil
 import tempfile
 import unittest
@@ -98,20 +100,61 @@ class InitializationGuardTests(unittest.TestCase):
                     marker, instance, digest, ["accounts"]
                 )
 
-    def test_migrations_must_match_bundle_exactly(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            folder = Path(tmp)
-            for source in (ROOT / "supabase/migrations").glob("*.sql"):
-                shutil.copyfile(source, folder / source.name)
-            self.assertEqual(len(self.module.validate_migrations(folder)), 8)
-            first = min(folder.glob("*.sql"))
-            first.write_bytes(first.read_bytes() + b"\n-- altered\n")
-            with self.assertRaises(RuntimeError):
-                self.module.validate_migrations(folder)
+    def test_single_sql_bundle_matches_original_ordered_migrations(self):
+        expected = "-- Fresh demo initialization only; run through demo/initialize.py.\n"
+        for name in sorted(self.module.EXPECTED_MIGRATIONS):
+            source = ROOT / "supabase/migrations" / name
+            expected += f"\n-- Source: {name}\n" + source.read_text().rstrip() + "\n"
+        actual = self.module.validate_initialization(ROOT / "demo/init.sql")
+        self.assertEqual(actual, expected)
 
-    def test_missing_migration_is_refused(self):
-        with tempfile.TemporaryDirectory() as tmp, self.assertRaises(RuntimeError):
-            self.module.validate_migrations(Path(tmp))
+    def test_missing_changed_or_directory_bundle_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "init.sql"
+            for invalid in [path, Path(tmp)]:
+                with self.subTest(invalid=invalid), self.assertRaises(RuntimeError):
+                    self.module.validate_initialization(invalid)
+            shutil.copyfile(ROOT / "demo/init.sql", path)
+            path.write_bytes(path.read_bytes() + b"\n-- altered\n")
+            with self.assertRaises(RuntimeError):
+                self.module.validate_initialization(path)
+
+    def test_windows_line_endings_are_accepted_and_other_sql_is_not_loaded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "init.sql"
+            expected = (ROOT / "demo/init.sql").read_text()
+            path.write_bytes(expected.replace("\n", "\r\n").encode())
+            (Path(tmp) / "unexpected.sql").write_text("DROP SCHEMA public CASCADE;")
+            self.assertEqual(self.module.validate_initialization(path), expected)
+
+    def test_original_installation_digest_remains_compatible(self):
+        hashes = {
+            p.name: hashlib.sha256(p.read_text().encode()).hexdigest()
+            for p in (ROOT / "supabase/migrations").glob("*.sql")
+        }
+        legacy = hashlib.sha256(
+            json.dumps(
+                dict(sorted(hashes.items())), separators=(",", ":"), ensure_ascii=True
+            ).encode("ascii")
+        ).hexdigest()
+        self.assertEqual(hashes, self.module.EXPECTED_MIGRATIONS)
+        self.assertEqual(self.module.migration_digest(hashes), legacy)
+        marker = {"instance_id": "same-instance", "migration_digest": legacy}
+        self.assertFalse(
+            self.module.validate_installation(
+                marker,
+                "same-instance",
+                self.module.migration_digest(self.module.EXPECTED_MIGRATIONS),
+                ["accounts"],
+            )
+        )
+
+    def test_compose_mounts_only_the_single_initialization_sql(self):
+        compose = (ROOT / "demo/compose.yaml").read_text()
+        self.assertIn("source: ./init.sql", compose)
+        self.assertIn("target: /demo/init.sql", compose)
+        self.assertIn("create_host_path: false", compose)
+        self.assertNotIn("../supabase/migrations", compose)
 
 
 if __name__ == "__main__":

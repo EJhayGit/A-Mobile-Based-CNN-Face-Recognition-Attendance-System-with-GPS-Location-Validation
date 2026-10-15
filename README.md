@@ -83,11 +83,14 @@ with Leaflet/OpenStreetMap. Montserrat's font notice is in
 
 ## Easy local demonstration on Windows
 
-To run a local demonstration, extract the full repository and
+To run a local demonstration, extract the full repository to a short location
+such as `C:\AGILA` without skipping files, and
 **double-click `Start-Demo.cmd`** after installing Docker Desktop's Linux engine.
 It automatically prepares a separate local database, creates private random
-credentials, starts AGILA, and opens Fleet Manager. No Python, Flutter or cloud
-database setup is needed on that PC. `Stop-Demo.cmd` stops only the demo and
+credentials, initializes fresh databases using the single verified `demo/init.sql`
+file, starts AGILA, and opens Fleet Manager. Historical migrations are retained
+for development; the demo does not require them at runtime. No Python, Flutter
+or cloud database setup is needed on that PC. `Stop-Demo.cmd` stops only the demo and
 preserves its data. See the [demo guide](demo/README.md) for installation,
 rehearsal, alternate ports and Android phone access. Local phone integration
 requires an HTTP-capable debug build; the existing release APK requires HTTPS.
