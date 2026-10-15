@@ -10,6 +10,13 @@ The official thesis title is **A Mobile-Based CNN Face Recognition Attendance Sy
 Android-only. This public release contains selected application and model source;
 it does not contain the private thesis workspace or its development history.
 
+## Live deployment
+
+Open the hosted [AGILA Fleet Manager](https://agila-thesis.onrender.com/).
+Manager access requires an authorized account. The
+[backend health check](https://agila-thesis.onrender.com/health) reports service
+and database connectivity. The Android application runs separately.
+
 ## Features
 
 - Field Personnel activation, sign-in, deactivation, and history-preserving deletion
