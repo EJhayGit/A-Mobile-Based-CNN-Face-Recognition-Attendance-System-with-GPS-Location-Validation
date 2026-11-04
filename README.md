@@ -10,12 +10,11 @@ The official thesis title is **A Mobile-Based CNN Face Recognition Attendance Sy
 Android-only. This public release contains selected application and model source;
 it does not contain the private thesis workspace or its development history.
 
-## Live deployment
+## Hosted instance
 
-Open the hosted [AGILA Fleet Manager](https://agila-thesis.onrender.com/).
-Manager access requires an authorized account. The
-[backend health check](https://agila-thesis.onrender.com/health) reports service
-and database connectivity. The Android application runs separately.
+The hosted AGILA Fleet Manager is currently paused because its database is
+paused, so sign-in and its health check do not work. To try AGILA, use the
+[local demonstration](#easy-local-demonstration-on-windows).
 
 ## Download Android APK
 
@@ -25,7 +24,9 @@ The [SHA-256 checksum](https://github.com/EJhayGit/A-Mobile-Based-CNN-Face-Recog
 is available to verify the download.
 
 Requires Android 7.0/API 24 or newer and an authorized account/activation.
-The APK uses the live AGILA HTTPS server by default. Version 1.0.5 fixes
+The APK uses the hosted AGILA server by default. That server is currently
+paused, so this APK cannot activate accounts, sign in, or synchronize until it
+is restored. Version 1.0.5 fixes
 release-only camera/face-processing crashes; the face-camera flow was confirmed
 on the affected Android phone. It uses the same release signing key as 1.0.1,
 so existing signed installations can update in place. Earlier debug APKs use a
